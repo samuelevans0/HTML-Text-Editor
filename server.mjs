@@ -63,6 +63,7 @@ function makeHandler(BASE, port) {
     const json = (code, obj) => send(code, JSON.stringify(obj), "application/json");
 
     try {
+      if (url.pathname === "/favicon.ico") return send(204, "");
       if (url.pathname === "/" || url.pathname === "/editor.html") {
         return send(200, await readFile(join(TOOL_DIR, "editor.html")), "text/html; charset=utf-8");
       }
