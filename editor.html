@@ -8266,6 +8266,31 @@ iframe.ready { display: block; }
   }
 
   // src/assets.js
+  var MIME = {
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".ico": "image/x-icon",
+    ".bmp": "image/bmp",
+    ".css": "text/css",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm"
+  };
+  function typedUrl(blob, path, urls) {
+    const want = MIME[extname(path)] || "";
+    const typed = blob.type ? blob : want ? new Blob([blob], { type: want }) : blob;
+    const u = URL.createObjectURL(typed);
+    urls.push(u);
+    return u;
+  }
   async function buildPreview(fs2, pagePath, cleanDoc) {
     const clone = cleanDoc.cloneNode(true);
     const urls = [];
@@ -8274,9 +8299,7 @@ iframe.ready { display: block; }
       const r = resolvePath(fromPath, ref);
       if (!r || r.external || !r.path || !await fs2.exists(r.path)) return null;
       const blob = await fs2.readBytes(r.path);
-      const u = URL.createObjectURL(blob);
-      urls.push(u);
-      return u;
+      return typedUrl(blob, r.path, urls);
     };
     for (const s of clone.querySelectorAll("script")) {
       s.setAttribute("type", "javascript/blocked");
@@ -8326,8 +8349,7 @@ iframe.ready { display: block; }
       const r = resolvePath(fromPath, ref);
       if (!r || r.external || !r.path || !await fs2.exists(r.path)) continue;
       const blob = await fs2.readBytes(r.path);
-      const u = URL.createObjectURL(blob);
-      urls.push(u);
+      const u = typedUrl(blob, r.path, urls);
       out = out.split(token).join(`url("${u}")`);
     }
     return out;

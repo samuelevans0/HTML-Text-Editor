@@ -2,7 +2,24 @@
 // blob: URLs read from the picked folder, and neutralize the site's own scripts.
 // Operates on a CLONE of the source-of-truth doc (which already carries data-edit-id),
 // so editId stamping is preserved in the preview. Browser-only.
-import { resolvePath } from "./paths.js";
+import { resolvePath, extname } from "./paths.js";
+
+const MIME = {
+  ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".gif": "image/gif", ".webp": "image/webp", ".avif": "image/avif", ".ico": "image/x-icon",
+  ".bmp": "image/bmp", ".css": "text/css", ".woff": "font/woff", ".woff2": "font/woff2",
+  ".ttf": "font/ttf", ".otf": "font/otf", ".mp4": "video/mp4", ".webm": "video/webm",
+};
+
+function typedUrl(blob, path, urls) {
+  // getFile() usually sets a type from the extension, but raw Blobs (and some
+  // edge cases) don't — <img> won't render SVG without image/svg+xml, so be explicit.
+  const want = MIME[extname(path)] || "";
+  const typed = blob.type ? blob : (want ? new Blob([blob], { type: want }) : blob);
+  const u = URL.createObjectURL(typed);
+  urls.push(u);
+  return u;
+}
 
 export async function buildPreview(fs, pagePath, cleanDoc) {
   const clone = cleanDoc.cloneNode(true);
@@ -13,9 +30,7 @@ export async function buildPreview(fs, pagePath, cleanDoc) {
     const r = resolvePath(fromPath, ref);
     if (!r || r.external || !r.path || !(await fs.exists(r.path))) return null;
     const blob = await fs.readBytes(r.path);
-    const u = URL.createObjectURL(blob);
-    urls.push(u);
-    return u;
+    return typedUrl(blob, r.path, urls);
   };
 
   // Neutralize scripts (kept as elements so the editId sequence is unchanged).
@@ -77,8 +92,7 @@ async function rewriteCssUrls(css, fs, fromPath, urls) {
     const r = resolvePath(fromPath, ref);
     if (!r || r.external || !r.path || !(await fs.exists(r.path))) continue;
     const blob = await fs.readBytes(r.path);
-    const u = URL.createObjectURL(blob);
-    urls.push(u);
+    const u = typedUrl(blob, r.path, urls);
     out = out.split(token).join(`url("${u}")`);
   }
   return out;
