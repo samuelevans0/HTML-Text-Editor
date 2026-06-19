@@ -5,13 +5,15 @@
   "type": "module",
   "scripts": {
     "build": "node build/assemble.mjs",
+    "build:exe": "node build/build-exe.mjs",
     "test": "node --test",
     "test:e2e": "node tests/e2e/run.mjs",
     "test:e2e-server": "node tests/e2e/server.mjs"
   },
   "devDependencies": {
-    "parse5": "^7.2.1",
     "esbuild": "^0.24.0",
-    "jsdom": "^25.0.1"
+    "jsdom": "^25.0.1",
+    "parse5": "^7.2.1",
+    "postject": "^1.0.0-alpha.6"
   }
 }

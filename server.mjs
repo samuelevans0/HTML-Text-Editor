@@ -7,7 +7,12 @@ import { join, resolve, sep, extname, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
-const TOOL_DIR = dirname(fileURLToPath(import.meta.url));
+// import.meta.url is empty in the SEA/esbuild CJS bundle; fall back to the exe dir there.
+// (In the packaged binary TOOL_DIR is unused anyway — editorPath/base are passed in.)
+const TOOL_DIR = (() => {
+  try { return dirname(fileURLToPath(import.meta.url)); }
+  catch { return dirname(process.execPath); }
+})();
 const DENY = new Set(["node_modules", ".git", ".wrangler", ".claude", ".vscode", "HTML Text Editor"]);
 const MIME = {
   ".html": "text/html", ".htm": "text/html", ".css": "text/css", ".js": "text/javascript",
@@ -134,9 +139,11 @@ function openBrowser(url) {
 }
 
 // CLI: node server.mjs [baseDir] [port]
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const selfPath = (() => { try { return fileURLToPath(import.meta.url); } catch { return null; } })();
+if (selfPath && process.argv[1] && resolve(process.argv[1]) === selfPath) {
   const base = process.argv[2] || join(TOOL_DIR, "..");
   const port = Number(process.argv[3] || process.env.PORT || 7777);
-  const { url, base: b } = await start({ base, port, open: !process.env.NO_OPEN });
-  console.log(`HTML Site Editor helper serving ${b}\n  -> ${url}\nPress Ctrl+C to stop.`);
+  start({ base, port, open: !process.env.NO_OPEN }).then(({ url, base: b }) => {
+    console.log(`HTML Site Editor helper serving ${b}\n  -> ${url}\nPress Ctrl+C to stop.`);
+  });
 }
