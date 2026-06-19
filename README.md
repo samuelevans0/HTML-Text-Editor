@@ -29,6 +29,17 @@ By default the helper shows the site folders sitting next to this tool. The help
 Node server bound to `127.0.0.1` (localhost only), with path-traversal protection and an
 Origin check so other websites can't reach your files.
 
+### No Node.js? Two options
+
+- **Install Node** (free) from <https://nodejs.org>, then use `start.cmd` / `start.sh`.
+- **Windows standalone:** double-click **`helper.exe`** — a single file that runs the helper
+  with no Node installed. It's **unsigned**, so Windows SmartScreen or your antivirus may warn
+  you the first time: click **"More info" → "Run anyway."** That's expected for an unsigned
+  local tool. If Node isn't found, `start.cmd` points you to this automatically.
+
+`helper.exe` isn't committed to git (it's ~87 MB). Build or refresh it with `npm run build:exe`
+(that step needs Node), or just copy the whole folder — the exe travels with it.
+
 ## Editing
 
 - **Text** — click any text and type. `Ctrl/Cmd+B` bold, `Ctrl/Cmd+I` italic.
@@ -67,6 +78,7 @@ You never need to build it to *use* it — the committed `editor.html` is ready 
 ```sh
 npm install            # dev deps: parse5, esbuild, jsdom
 npm run build          # bundle src/ + parse5 -> editor.html
+npm run build:exe      # build the standalone helper.exe (Node SEA; gitignored)
 npm test               # unit tests (engine, helpers, server, serverFs) via node:test
 npm run test:e2e       # headless file:// flow (in-memory fs)
 npm run test:e2e-server # headless server flow over http://localhost
