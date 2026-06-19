@@ -8313,10 +8313,14 @@ iframe.ready { display: block; }
       const blob = await fs2.readBytes(r.path);
       return typedUrl(blob, r.path, urls);
     };
-    for (const s of clone.querySelectorAll("script")) {
-      s.setAttribute("type", "javascript/blocked");
-      s.removeAttribute("src");
-      s.textContent = "";
+    const guard = clone.createElement("script");
+    guard.textContent = "(function(){window.open=function(){return null;};document.addEventListener('submit',function(e){e.preventDefault();},true);try{var _n=function(){};history.pushState=_n;history.replaceState=_n;}catch(e){}})();";
+    const head = clone.querySelector("head");
+    if (head) head.insertBefore(guard, head.firstChild);
+    else clone.documentElement.insertBefore(guard, clone.documentElement.firstChild);
+    for (const s of clone.querySelectorAll("script[src]")) {
+      const u = await objUrl(s.getAttribute("src"), pagePath);
+      if (u) s.setAttribute("src", u);
     }
     for (const el of clone.querySelectorAll("img[src], source[src], video[poster], audio[src]")) {
       const attr = el.tagName === "VIDEO" ? "poster" : "src";
@@ -8666,10 +8670,16 @@ a[href]{cursor:alias;}
   var currentRevoke = null;
   var navStack = [];
   function matchSite(name, sites) {
-    const last = (s) => s.split("/").pop();
+    const segs = (s) => s.split("/");
+    const last = (s) => segs(s).pop();
     let m = sites.find((s) => last(s) === name);
     if (m) return m;
     m = sites.find((s) => last(s).toLowerCase() === String(name).toLowerCase());
+    if (m) return m;
+    m = sites.find((s) => segs(s).includes(name));
+    if (m) return m;
+    const nl = String(name).toLowerCase();
+    m = sites.find((s) => segs(s).some((p) => p.toLowerCase() === nl));
     return m || null;
   }
   function h(tag, attrs = {}, ...kids) {
@@ -8799,6 +8809,39 @@ a[href]{cursor:alias;}
       list.append(h("button", { class: "btn go site-btn", onclick: () => startSession(createServerFs(s), s) }, s));
     }
     card.append(list);
+  }
+  function createSingleFileFs(fileHandle) {
+    const name = fileHandle.name;
+    return {
+      rootHandle: {
+        name,
+        async *values() {
+          yield { kind: "file", name };
+        }
+      },
+      async readText() {
+        return (await fileHandle.getFile()).text();
+      },
+      async readBytes() {
+        return fileHandle.getFile();
+      },
+      async writeText(p, t) {
+        const w = await fileHandle.createWritable();
+        await w.write(t);
+        await w.close();
+      },
+      async writeBytes(p, b) {
+        const w = await fileHandle.createWritable();
+        await w.write(b instanceof Blob ? b : new Blob([b]));
+        await w.close();
+      },
+      async exists(p) {
+        return p === name;
+      },
+      async uniqueName(dir, base) {
+        return base;
+      }
+    };
   }
   async function openFolder() {
     if (inServerMode()) return showSitePicker();
@@ -8964,7 +9007,7 @@ a[href]{cursor:alias;}
   }
   function installDragAndDrop() {
     let sitesCache = null;
-    const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder to edit it");
+    const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder or .html file to edit it");
     document.body.append(overlay);
     let depth = 0;
     window.addEventListener("dragenter", (e) => {
@@ -8994,6 +9037,20 @@ a[href]{cursor:alias;}
               }
             }
             await startSession(createFs(handle), handle.name);
+            return;
+          }
+          if (handle && handle.kind === "file") {
+            if (!/\.html?$/i.test(handle.name)) {
+              showToast("Drop an <b>.html</b> file or a site folder.", true);
+              return;
+            }
+            if (handle.requestPermission) {
+              try {
+                await handle.requestPermission({ mode: "readwrite" });
+              } catch {
+              }
+            }
+            await startSession(createSingleFileFs(handle), handle.name);
             return;
           }
         } catch {

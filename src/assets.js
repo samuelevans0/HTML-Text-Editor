@@ -33,11 +33,19 @@ export async function buildPreview(fs, pagePath, cleanDoc) {
     return typedUrl(blob, r.path, urls);
   };
 
-  // Neutralize scripts (kept as elements so the editId sequence is unchanged).
-  for (const s of clone.querySelectorAll("script")) {
-    s.setAttribute("type", "javascript/blocked");
-    s.removeAttribute("src");
-    s.textContent = "";
+  // Inject a guard script first so site scripts can't navigate away or submit forms.
+  // Using a non-module IIFE so it runs synchronously before any deferred site scripts.
+  const guard = clone.createElement("script");
+  guard.textContent = "(function(){window.open=function(){return null;};document.addEventListener('submit',function(e){e.preventDefault();},true);try{var _n=function(){};history.pushState=_n;history.replaceState=_n;}catch(e){}})();";
+  const head = clone.querySelector("head");
+  if (head) head.insertBefore(guard, head.firstChild);
+  else clone.documentElement.insertBefore(guard, clone.documentElement.firstChild);
+
+  // Rewrite local script src -> blob URLs so scripts load from srcdoc.
+  // (Relative src would fail since srcdoc has no base URL; absolute CDN src loads fine as-is.)
+  for (const s of clone.querySelectorAll("script[src]")) {
+    const u = await objUrl(s.getAttribute("src"), pagePath);
+    if (u) s.setAttribute("src", u);
   }
 
   // Simple single-URL attributes.

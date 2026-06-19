@@ -13,12 +13,20 @@ let currentPath = null;
 let currentRevoke = null;
 const navStack = [];
 
-// Pure: pick the helper site whose last path segment matches a dropped folder name.
+// Pure: pick the helper site whose path contains a segment matching the dropped folder name.
+// Tries exact last-segment first, then case-insensitive last-segment, then any segment
+// (so dragging "Samuel Evans" matches "Samuel Evans/public").
 export function matchSite(name, sites) {
-  const last = (s) => s.split("/").pop();
+  const segs = (s) => s.split("/");
+  const last = (s) => segs(s).pop();
   let m = sites.find((s) => last(s) === name);
   if (m) return m;
   m = sites.find((s) => last(s).toLowerCase() === String(name).toLowerCase());
+  if (m) return m;
+  m = sites.find((s) => segs(s).includes(name));
+  if (m) return m;
+  const nl = String(name).toLowerCase();
+  m = sites.find((s) => segs(s).some((p) => p.toLowerCase() === nl));
   return m || null;
 }
 
@@ -129,6 +137,29 @@ async function showSitePicker() {
     list.append(h("button", { class: "btn go site-btn", onclick: () => startSession(createServerFs(s), s) }, s));
   }
   card.append(list);
+}
+
+// Wrap a single FileSystemFileHandle as a minimal fs (Chromium drag of a .html file).
+function createSingleFileFs(fileHandle) {
+  const name = fileHandle.name;
+  return {
+    rootHandle: {
+      name,
+      async *values() { yield { kind: "file", name }; },
+    },
+    async readText() { return (await fileHandle.getFile()).text(); },
+    async readBytes() { return fileHandle.getFile(); },
+    async writeText(p, t) {
+      const w = await fileHandle.createWritable();
+      await w.write(t); await w.close();
+    },
+    async writeBytes(p, b) {
+      const w = await fileHandle.createWritable();
+      await w.write(b instanceof Blob ? b : new Blob([b])); await w.close();
+    },
+    async exists(p) { return p === name; },
+    async uniqueName(dir, base) { return base; },
+  };
 }
 
 // ---- open (file:// File System Access) ----
@@ -303,7 +334,7 @@ function discardCurrent() {
 // ---- drag and drop ----
 function installDragAndDrop() {
   let sitesCache = null;
-  const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder to edit it");
+  const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder or .html file to edit it");
   document.body.append(overlay);
   let depth = 0;
   window.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; overlay.classList.add("show"); });
@@ -313,13 +344,22 @@ function installDragAndDrop() {
     e.preventDefault(); depth = 0; overlay.classList.remove("show");
     const item = e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items[0];
     if (!item) return;
-    // Chromium: get a writable directory handle (works in file:// and server mode).
+    // Chromium: get a writable handle (works in file:// and server mode).
     if (typeof item.getAsFileSystemHandle === "function") {
       try {
         const handle = await item.getAsFileSystemHandle();
         if (handle && handle.kind === "directory") {
           if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
           await startSession(createFs(handle), handle.name);
+          return;
+        }
+        if (handle && handle.kind === "file") {
+          if (!/\.html?$/i.test(handle.name)) {
+            showToast("Drop an <b>.html</b> file or a site folder.", true);
+            return;
+          }
+          if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
+          await startSession(createSingleFileFs(handle), handle.name);
           return;
         }
       } catch {}
