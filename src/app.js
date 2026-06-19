@@ -344,39 +344,51 @@ function installDragAndDrop() {
     e.preventDefault(); depth = 0; overlay.classList.remove("show");
     const item = e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items[0];
     if (!item) return;
-    // Chromium: get a writable handle (works in file:// and server mode).
+
+    // Chromium path: get a handle directly from the drag event so we can open
+    // ANY folder or .html file, regardless of whether it's under the helper.
+    // Only wrap the handle acquisition in try/catch — startSession errors surface normally.
     if (typeof item.getAsFileSystemHandle === "function") {
-      try {
-        const handle = await item.getAsFileSystemHandle();
-        if (handle && handle.kind === "directory") {
-          if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
-          await startSession(createFs(handle), handle.name);
-          return;
+      let handle = null;
+      try { handle = await item.getAsFileSystemHandle(); } catch {}
+      if (handle && handle.kind === "directory") {
+        if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
+        await startSession(createFs(handle), handle.name);
+        return;
+      }
+      if (handle && handle.kind === "file") {
+        if (!/\.html?$/i.test(handle.name)) {
+          showToast("Drop an <b>.html</b> file or a site folder.", true); return;
         }
-        if (handle && handle.kind === "file") {
-          if (!/\.html?$/i.test(handle.name)) {
-            showToast("Drop an <b>.html</b> file or a site folder.", true);
-            return;
-          }
-          if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
-          await startSession(createSingleFileFs(handle), handle.name);
-          return;
-        }
-      } catch {}
+        if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
+        await startSession(createSingleFileFs(handle), handle.name);
+        return;
+      }
     }
-    // Other browsers: match the dropped folder name to a helper site.
+
+    // Non-Chromium (Firefox, Brave with Shields, …): no File System Access API.
+    // In server mode we can only open folders the helper already knows about.
     const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
-    const name = entry && entry.isDirectory ? entry.name : null;
-    if (inServerMode() && name) {
+    if (entry && entry.isDirectory) {
+      if (!inServerMode()) {
+        showToast("Folder drag works in <b>Chrome/Edge</b>. In other browsers, start the helper (<code>start.cmd</code>) and pick a site from the list.", true);
+        return;
+      }
       try {
         if (!sitesCache) sitesCache = (await fetchSites()).sites;
-        const match = matchSite(name, sitesCache);
+        const match = matchSite(entry.name, sitesCache);
         if (match) { await startSession(createServerFs(match), match); return; }
       } catch {}
-      showToast("Couldn't find <b>" + escapeHtml(name) + "</b> under the helper's folder. Move it there, or pick it from the list.", true);
+      showToast("Couldn't find <b>" + escapeHtml(entry.name) + "</b> under the helper's folder. Move it there, or pick it from the list.", true);
       return;
     }
-    showToast("To open a dropped folder here, use <b>Chrome/Edge</b>, or start the helper (<code>start.cmd</code>) and drag a site under its folder.", true);
+    if (entry && entry.isFile) {
+      showToast(inServerMode()
+        ? "Single-file drag needs <b>Chrome/Edge</b>. In Firefox, pick a site from the list instead."
+        : "File drag works in <b>Chrome/Edge</b>. Open <code>editor.html</code> in Chrome/Edge to drag files.", true);
+      return;
+    }
+    showToast("Drop a site folder or <code>.html</code> file. (Chrome/Edge: any folder; Firefox/Brave: use the helper and pick from the list.)", true);
   });
 }
 
