@@ -18,7 +18,7 @@ const MIME = {
 };
 const mimeFor = (p) => MIME[extname(p).toLowerCase()] || "application/octet-stream";
 
-function makeHandler(BASE, port) {
+function makeHandler(BASE, port, editorPath) {
   const safe = (site, path) => {
     const abs = resolve(BASE, site || "", path || "");
     if (abs !== BASE && !abs.startsWith(BASE + sep)) return null;
@@ -65,7 +65,7 @@ function makeHandler(BASE, port) {
     try {
       if (url.pathname === "/favicon.ico") return send(204, "");
       if (url.pathname === "/" || url.pathname === "/editor.html") {
-        return send(200, await readFile(join(TOOL_DIR, "editor.html")), "text/html; charset=utf-8");
+        return send(200, await readFile(editorPath), "text/html; charset=utf-8");
       }
       if (url.pathname.startsWith("/__api/")) {
         if (!originOk(req)) return send(403, "bad origin");
@@ -104,7 +104,7 @@ function makeHandler(BASE, port) {
   };
 }
 
-export function start({ base, port = 7777, open = false } = {}) {
+export function start({ base, port = 7777, open = false, editorPath = join(TOOL_DIR, "editor.html") } = {}) {
   const BASE = resolve(base);
   return new Promise((resolveP, rejectP) => {
     let tries = 0;
@@ -117,7 +117,7 @@ export function start({ base, port = 7777, open = false } = {}) {
       server.listen(p, "127.0.0.1", () => {
         const actual = server.address().port;
         server.removeAllListeners("error");
-        server.on("request", makeHandler(BASE, actual));
+        server.on("request", makeHandler(BASE, actual, editorPath));
         const url = `http://localhost:${actual}/`;
         if (open) openBrowser(url);
         resolveP({ server, port: actual, url, base: BASE });

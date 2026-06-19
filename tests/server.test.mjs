@@ -83,3 +83,13 @@ test("same-origin request with matching Origin is allowed", async () => {
   const r = await fetch(origin + "/__api/sites", { headers: { Origin: origin } });
   assert.equal(r.status, 200);
 });
+
+test("editorPath overrides the served editor file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hse-ep-"));
+  await writeFile(join(dir, "custom.html"), "<!DOCTYPE html><title>CUSTOM-EDITOR</title>");
+  const r = await start({ base: dir, port: 0, open: false, editorPath: join(dir, "custom.html") });
+  try {
+    const res = await fetch(`http://127.0.0.1:${r.port}/editor.html`);
+    assert.match(await res.text(), /CUSTOM-EDITOR/);
+  } finally { r.server.close(); }
+});
