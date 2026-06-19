@@ -4,6 +4,7 @@ import { createSession } from "./pages.js";
 import { buildPreview } from "./assets.js";
 import { wireEditor } from "./editor.js";
 import { resolvePath, isHtml } from "./paths.js";
+import { inServerMode, siteFromQuery, fetchSites, createServerFs } from "./serverFs.js";
 
 let fs = null;
 let session = null;
@@ -11,6 +12,15 @@ let rootHandle = null;
 let currentPath = null;
 let currentRevoke = null;
 const navStack = [];
+
+// Pure: pick the helper site whose last path segment matches a dropped folder name.
+export function matchSite(name, sites) {
+  const last = (s) => s.split("/").pop();
+  let m = sites.find((s) => last(s) === name);
+  if (m) return m;
+  m = sites.find((s) => last(s).toLowerCase() === String(name).toLowerCase());
+  return m || null;
+}
 
 // ---- tiny DOM helper ----
 function h(tag, attrs = {}, ...kids) {
@@ -53,11 +63,12 @@ export function bootApp() {
 
   app.append(els.bar, els.stage, els.toast);
 
-  if (!supported()) {
-    els.open.disabled = true;
-    els.pill.textContent = "Unsupported browser";
+  if (inServerMode()) {
+    bootServerMode();
+  } else if (!supported()) {
+    els.pill.textContent = "Needs the launcher";
     els.pill.className = "pill warn";
-    showToast("This tool needs the File System Access API — please open it in <b>Chrome</b> or <b>Edge</b>.", true);
+    showToast("To edit in <b>this</b> browser, start the helper: double-click <code>start.cmd</code>. (Chrome/Edge can also open <code>editor.html</code> directly.)", true);
   }
 
   document.addEventListener("keydown", (e) => {
@@ -69,8 +80,7 @@ export function bootApp() {
   window.addEventListener("beforeunload", (e) => {
     if (session && session.globalDirty()) { e.preventDefault(); e.returnValue = ""; }
   });
-  window.addEventListener("dragover", (e) => e.preventDefault());
-  window.addEventListener("drop", (e) => e.preventDefault());
+  installDragAndDrop();
 
   if (/[?&]test=1/.test(location.search)) installTestApi();
 }
@@ -85,12 +95,49 @@ function buildWelcome() {
         h("li", { html: "Click text to edit · <b>Ctrl/Cmd+B/I</b> for bold/italic · click an image to replace it." }),
         h("li", { html: "Click a link to open and edit that page · <b>Alt-click</b> a link to change where it points." }),
         h("li", { html: "Click <b>Save All</b> (or <b>Ctrl/Cmd+S</b>). Only the bits you changed are written." })),
-      h("p", { class: "hint", html: "Works in <b>Chrome</b> or <b>Edge</b>. Your files are read and written directly on your computer — nothing is uploaded." }),
+      h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave…), start the helper with <code>start.cmd</code>." }),
       h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder")));
 }
 
-// ---- open ----
+// ---- server mode ----
+async function bootServerMode() {
+  els.pill.textContent = "Helper connected";
+  els.pill.className = "pill ok";
+  els.open.textContent = "Choose a site";
+  const site = siteFromQuery();
+  if (site) { await startSession(createServerFs(site), site); return; }
+  await showSitePicker();
+}
+
+async function showSitePicker() {
+  let data;
+  try { data = await fetchSites(); }
+  catch { showToast("Can't reach the local helper — is <code>start.cmd</code> running?", true); return; }
+  if (currentRevoke) { currentRevoke(); currentRevoke = null; }
+  els.frame.classList.remove("ready");
+  els.welcome.style.display = "grid";
+  const card = els.welcome.querySelector(".welcome-card");
+  card.innerHTML = "";
+  card.append(h("h1", {}, "Pick a site to edit"));
+  if (!data.sites.length) {
+    card.append(h("p", { html: `No site folders found under <code>${escapeHtml(data.base)}</code>.` }));
+    return;
+  }
+  card.append(h("p", { class: "hint", html: `Folders under <b>${escapeHtml(data.base)}</b> — or drag one onto this window.` }));
+  const list = h("div", { class: "site-list" });
+  for (const s of data.sites) {
+    list.append(h("button", { class: "btn go site-btn", onclick: () => startSession(createServerFs(s), s) }, s));
+  }
+  card.append(list);
+}
+
+// ---- open (file:// File System Access) ----
 async function openFolder() {
+  if (inServerMode()) return showSitePicker();
+  if (!supported()) {
+    showToast("This browser can't save files directly. Start the helper — double-click <code>start.cmd</code> — and use the link it opens.", true);
+    return;
+  }
   try {
     rootHandle = await pickRoot();
   } catch (err) {
@@ -229,7 +276,7 @@ async function saveAll() {
   try {
     result = await session.saveAll();
   } catch (err) {
-    showToast("Save failed: " + (err && err.message) + ". Try Open again and click Allow.", true);
+    showToast("Save failed: " + (err && err.message) + ". Try Open again, or check the helper is running.", true);
     updateChrome();
     return null;
   }
@@ -251,6 +298,46 @@ function discardCurrent() {
   session.discard(currentPath);
   loadPage(currentPath, true);
   showToast("Reverted this page to its last saved version.");
+}
+
+// ---- drag and drop ----
+function installDragAndDrop() {
+  let sitesCache = null;
+  const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder to edit it");
+  document.body.append(overlay);
+  let depth = 0;
+  window.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; overlay.classList.add("show"); });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("dragleave", (e) => { e.preventDefault(); if (--depth <= 0) overlay.classList.remove("show"); });
+  window.addEventListener("drop", async (e) => {
+    e.preventDefault(); depth = 0; overlay.classList.remove("show");
+    const item = e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items[0];
+    if (!item) return;
+    // Chromium: get a writable directory handle (works in file:// and server mode).
+    if (typeof item.getAsFileSystemHandle === "function") {
+      try {
+        const handle = await item.getAsFileSystemHandle();
+        if (handle && handle.kind === "directory") {
+          if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
+          await startSession(createFs(handle), handle.name);
+          return;
+        }
+      } catch {}
+    }
+    // Other browsers: match the dropped folder name to a helper site.
+    const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+    const name = entry && entry.isDirectory ? entry.name : null;
+    if (inServerMode() && name) {
+      try {
+        if (!sitesCache) sitesCache = (await fetchSites()).sites;
+        const match = matchSite(name, sitesCache);
+        if (match) { await startSession(createServerFs(match), match); return; }
+      } catch {}
+      showToast("Couldn't find <b>" + escapeHtml(name) + "</b> under the helper's folder. Move it there, or pick it from the list.", true);
+      return;
+    }
+    showToast("To open a dropped folder here, use <b>Chrome/Edge</b>, or start the helper (<code>start.cmd</code>) and drag a site under its folder.", true);
+  });
 }
 
 // ---- chrome state ----

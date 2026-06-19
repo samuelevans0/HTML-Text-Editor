@@ -78,3 +78,15 @@ iframe.ready { display: block; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.err { background: #3b1d1d; border-color: rgba(248,113,113,.5); }
 .toast code { background: rgba(0,0,0,.3); padding: .1rem .35rem; border-radius: 4px; }
+
+/* server-mode site picker */
+.site-list { display: flex; flex-direction: column; gap: .5rem; margin: 1.3rem auto 0; max-width: 26rem; }
+.site-btn { justify-content: center; padding: .7rem 1rem; }
+
+/* drag-and-drop overlay */
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 100; display: none; place-items: center;
+  background: rgba(37,99,235,.18); border: 3px dashed var(--accent); color: #fff;
+  font-size: 1.4rem; font-weight: 700; backdrop-filter: blur(2px);
+}
+.drop-overlay.show { display: grid; }
