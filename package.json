@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node build/assemble.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "test:e2e": "node tests/e2e/run.mjs"
   },
   "devDependencies": {
     "parse5": "^7.2.1",

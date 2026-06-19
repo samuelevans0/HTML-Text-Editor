@@ -52,7 +52,7 @@ export async function buildPreview(fs, pagePath, cleanDoc) {
     if (!r || r.external || !r.path || !(await fs.exists(r.path))) continue;
     let css = await fs.readText(r.path);
     css = await rewriteCssUrls(css, fs, r.path, urls);
-    const style = clone.ownerDocument.createElement("style");
+    const style = clone.createElement("style");
     style.setAttribute("data-from", link.getAttribute("href"));
     style.textContent = css;
     link.replaceWith(style);

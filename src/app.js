@@ -71,6 +71,8 @@ export function bootApp() {
   });
   window.addEventListener("dragover", (e) => e.preventDefault());
   window.addEventListener("drop", (e) => e.preventDefault());
+
+  if (/[?&]test=1/.test(location.search)) installTestApi();
 }
 
 function buildWelcome() {
@@ -96,23 +98,28 @@ async function openFolder() {
     showToast("Couldn't open the folder: " + (err && err.message), true);
     return;
   }
-  fs = createFs(rootHandle);
-  session = createSession(fs);
-  navStack.length = 0;
-  const start = await findStartPage(rootHandle);
-  if (!start) {
-    showToast("That folder has no <code>.html</code> pages. Pick the folder that holds your website.", true);
-    return;
-  }
-  els.pill.textContent = "Editing: " + rootHandle.name;
-  els.pill.className = "pill ok";
-  await loadPage(start, false);
-  showToast("Opened <b>" + escapeHtml(rootHandle.name) + "</b>. Edit text, swap images, follow links, then Save All.");
+  await startSession(createFs(rootHandle), rootHandle.name);
 }
 
-async function findStartPage(root) {
+async function startSession(theFs, name) {
+  fs = theFs;
+  session = createSession(fs);
+  navStack.length = 0;
+  const start = await findStartPage(fs);
+  if (!start) {
+    showToast("That folder has no <code>.html</code> pages. Pick the folder that holds your website.", true);
+    return null;
+  }
+  els.pill.textContent = "Editing: " + name;
+  els.pill.className = "pill ok";
+  await loadPage(start, false);
+  showToast("Opened <b>" + escapeHtml(name) + "</b>. Edit text, swap images, follow links, then Save All.");
+  return start;
+}
+
+async function findStartPage(theFs) {
   const htmls = [];
-  for await (const entry of root.values()) {
+  for await (const entry of theFs.rootHandle.values()) {
     if (entry.kind === "file" && /\.html?$/i.test(entry.name)) htmls.push(entry.name);
   }
   if (htmls.includes("index.html")) return "index.html";
@@ -224,7 +231,7 @@ async function saveAll() {
   } catch (err) {
     showToast("Save failed: " + (err && err.message) + ". Try Open again and click Allow.", true);
     updateChrome();
-    return;
+    return null;
   }
   const parts = [];
   if (result.savedPages.length) parts.push(result.savedPages.length + " page" + (result.savedPages.length > 1 ? "s" : ""));
@@ -236,6 +243,7 @@ async function saveAll() {
     showToast("Some edits were skipped to protect your files:<br>" + lines, true);
   }
   updateChrome();
+  return result;
 }
 
 function discardCurrent() {
@@ -267,4 +275,73 @@ function showToast(html, isErr) {
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// ---- test harness (only with ?test=1): in-memory fs so a headless browser can
+// drive the real load/edit/navigate/save code path without the native picker. ----
+function makeMemoryFs(files, name) {
+  const map = new Map(Object.entries(files)); // path -> string | Uint8Array
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  const toBytes = (v) => (typeof v === "string" ? enc.encode(v) : v);
+  const api = {
+    rootHandle: {
+      name,
+      async *values() {
+        for (const key of map.keys()) {
+          if (!key.includes("/")) yield { kind: "file", name: key };
+        }
+      },
+    },
+    async readText(p) { const v = map.get(p); return typeof v === "string" ? v : dec.decode(v); },
+    async readBytes(p) { return new Blob([toBytes(map.get(p))]); },
+    async writeText(p, t) { map.set(p, t); },
+    async writeBytes(p, blob) { map.set(p, new Uint8Array(await blob.arrayBuffer())); },
+    async exists(p) { return map.has(p); },
+    async uniqueName(dir, base) {
+      const dot = base.lastIndexOf(".");
+      const stem = dot > 0 ? base.slice(0, dot) : base;
+      const ext = dot > 0 ? base.slice(dot) : "";
+      let nm = base, i = 0;
+      while (map.has((dir ? dir + "/" : "") + nm)) { i++; nm = `${stem}-${i}${ext}`; }
+      return nm;
+    },
+    _map: map,
+  };
+  return api;
+}
+
+function installTestApi() {
+  window.EDITOR_TEST = {
+    async open(files) {
+      const memFs = makeMemoryFs(files, "test-site");
+      window.EDITOR_TEST._fs = memFs;
+      await startSession(memFs, "test-site");
+      return currentPath;
+    },
+    async getText(p) { return window.EDITOR_TEST._fs.readText(p); },
+    current() { return currentPath; },
+    idoc() { return els.frame.contentDocument; },
+    editText(editId, html) {
+      const el = els.frame.contentDocument.querySelector(`[data-edit-id="${editId}"]`);
+      el.innerHTML = html;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    },
+    clickLink(editId, alt) {
+      const el = els.frame.contentDocument.querySelector(`a[data-edit-id="${editId}"]`);
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: !!alt }));
+    },
+    async replaceImage(editId, b64, fname) {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const file = new File([bytes], fname, { type: "image/png" });
+      const img = els.frame.contentDocument.querySelector(`img[data-edit-id="${editId}"]`);
+      session.recordEdit(currentPath, { editId, kind: "image", file, originalSrc: img ? img.getAttribute("data-original-src") : "" });
+      if (img) img.setAttribute("src", URL.createObjectURL(file));
+      updateChrome();
+    },
+    async save() { return saveAll(); },
+    dirty() { return session ? session.globalDirty() : false; },
+  };
 }
