@@ -46,7 +46,7 @@ export function createTauriFs(rootPath) {
       const stem = dot > 0 ? baseName.slice(0, dot) : baseName;
       const ext = dot > 0 ? baseName.slice(dot) : "";
       let nm = baseName, i = 0;
-      while (await this.exists((dirPath ? dirPath + "/" : "") + nm)) {
+      while (await call("path_exists", { path: abs(rootPath, (dirPath ? dirPath + "/" : "") + nm) })) {
         i++; nm = `${stem}-${i}${ext}`;
       }
       return nm;
