@@ -88,6 +88,24 @@ iframe.ready { display: block; }
 .toast.err { background: #3b1d1d; border-color: rgba(248,113,113,.5); }
 .toast code { background: rgba(0,0,0,.3); padding: .1rem .35rem; border-radius: 4px; }
 
+/* home button — only visible when a session is open */
+.home-btn { font-size: .78rem; padding: .38rem .65rem; }
+
+/* pages dropdown */
+.pages-menu { position: relative; }
+.pages-trigger { font-size: .78rem; padding: .38rem .65rem; }
+.pages-list { display: none; position: absolute; top: calc(100% + .35rem); left: 0; min-width: 11rem; background: var(--bar2); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); z-index: 200; padding: .3rem; }
+.pages-menu.open .pages-list { display: flex; flex-direction: column; gap: .15rem; }
+.pages-item { justify-content: flex-start; font-size: .82rem; border-radius: 5px; padding: .4rem .7rem; }
+.pages-item.active { color: var(--accent); }
+
+/* open dropdown (Tauri) */
+.open-menu { position: relative; }
+.open-menu-trigger { }
+.open-menu-list { display: none; position: absolute; top: calc(100% + .35rem); right: 0; min-width: 12rem; background: var(--bar2); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); z-index: 200; padding: .3rem; }
+.open-menu.open .open-menu-list { display: flex; flex-direction: column; gap: .15rem; }
+.open-menu-item { justify-content: flex-start; font-size: .82rem; border-radius: 5px; padding: .4rem .7rem; }
+
 /* server-mode site picker */
 .site-list { display: flex; flex-direction: column; gap: .5rem; margin: 1.3rem auto 0; max-width: 26rem; }
 .site-btn { justify-content: center; padding: .7rem 1rem; }
@@ -8167,6 +8185,14 @@ iframe.ready { display: block; }
     }
     return { ok: true };
   }
+  function attrInsertPoint(html, startTagLoc) {
+    const raw = html.slice(startTagLoc.startOffset, startTagLoc.endOffset);
+    const gt = raw.lastIndexOf(">");
+    let pos = gt;
+    if (pos > 0 && raw[pos - 1] === "/") pos--;
+    while (pos > 0 && raw[pos - 1] === " ") pos--;
+    return startTagLoc.startOffset + pos;
+  }
   function escapeAttr(s) {
     return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   }
@@ -8196,14 +8222,21 @@ iframe.ready { display: block; }
         applied.push(edit.editId);
       } else if (edit.kind === "attr") {
         const range = attrToken(node, edit.attrName);
-        if (!range) {
-          skipped.push({ editId: edit.editId, reason: "attribute not found" });
-          continue;
+        if (range) {
+          const replacement = `${edit.attrName}="${escapeAttr(edit.value)}"`;
+          if (originalHtml.slice(range[0], range[1]) === replacement) continue;
+          splices.push({ range, replacement });
+          applied.push(edit.editId);
+        } else {
+          const loc = node.sourceCodeLocation;
+          if (!loc || !loc.startTag) {
+            skipped.push({ editId: edit.editId, reason: "attribute not found and no start tag" });
+            continue;
+          }
+          const insertAt = attrInsertPoint(originalHtml, loc.startTag);
+          splices.push({ range: [insertAt, insertAt], replacement: ` ${edit.attrName}="${escapeAttr(edit.value)}"` });
+          applied.push(edit.editId);
         }
-        const replacement = `${edit.attrName}="${escapeAttr(edit.value)}"`;
-        if (originalHtml.slice(range[0], range[1]) === replacement) continue;
-        splices.push({ range, replacement });
-        applied.push(edit.editId);
       } else {
         skipped.push({ editId: edit.editId, reason: "unknown edit kind" });
       }
@@ -8498,6 +8531,10 @@ iframe.ready { display: block; }
 [data-edit-id][contenteditable]:focus{outline:2px solid #3b82f6;background:rgba(59,130,246,.10);}
 img[data-edit-id]{cursor:copy;}
 img[data-edit-id]:hover{outline:3px solid #3b82f6;outline-offset:-3px;}
+img[data-crop-active]{cursor:grab;outline:2px solid #3b82f6;outline-offset:-2px;}
+img[data-crop-active]:active{cursor:grabbing;}
+.__crop-hint{position:fixed;bottom:.9rem;left:50%;transform:translateX(-50%);background:rgba(15,17,21,.88);color:#e7e9ee;font:600 .78rem/-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:.45rem .9rem;border-radius:8px;pointer-events:none;white-space:nowrap;z-index:9999;border:1px solid rgba(255,255,255,.12);}
+.__resize-handle{position:absolute;width:14px;height:14px;background:#fff;border:2px solid #3b82f6;border-radius:3px;cursor:se-resize;z-index:9999;box-shadow:0 1px 4px rgba(0,0,0,.3);}
 a[href]{cursor:alias;}
 `;
   function wireEditor(doc, cb) {
@@ -8540,7 +8577,7 @@ a[href]{cursor:alias;}
     for (const img of doc.querySelectorAll("img[data-edit-id]")) {
       img.addEventListener("click", (e) => {
         e.preventDefault();
-        chooseImage(img, doc, cb);
+        chooseImage(img, cb);
       });
     }
     doc.addEventListener("dragover", (e) => {
@@ -8577,11 +8614,18 @@ a[href]{cursor:alias;}
         }
       }
     });
-    return { revoke() {
-      style.remove();
-    } };
+    return {
+      revoke() {
+        style.remove();
+      },
+      // Apply an image file to a specific img element (used by Tauri drag-drop handler).
+      applyImageAt(img, file) {
+        applyImage(img, file, cb);
+      }
+    };
   }
-  function chooseImage(img, doc, cb) {
+  function chooseImage(img, cb) {
+    const doc = img.ownerDocument;
     const inp = doc.createElement("input");
     inp.type = "file";
     inp.accept = "image/*";
@@ -8591,15 +8635,103 @@ a[href]{cursor:alias;}
     };
     inp.click();
   }
+  function mergeStyle(existing, updates) {
+    const props = /* @__PURE__ */ Object.create(null);
+    for (const decl of (existing || "").split(";")) {
+      const colon = decl.indexOf(":");
+      if (colon < 0) continue;
+      const k = decl.slice(0, colon).trim();
+      const v = decl.slice(colon + 1).trim();
+      if (k) props[k] = v;
+    }
+    for (const [k, v] of Object.entries(updates)) props[k] = v;
+    return Object.entries(props).map(([k, v]) => `${k}:${v}`).join(";");
+  }
   function applyImage(img, file, cb) {
+    const editId = Number(img.getAttribute("data-edit-id"));
     const u = URL.createObjectURL(file);
     img.setAttribute("src", u);
+    const origStyle = img.getAttribute("style") || "";
+    const newStyle = mergeStyle(origStyle, { "object-fit": "cover", "object-position": "50% 50%" });
+    img.setAttribute("style", newStyle);
     cb.onDirty();
-    cb.onEdit({
-      editId: Number(img.getAttribute("data-edit-id")),
-      kind: "image",
-      file,
-      originalSrc: img.getAttribute("data-original-src") || ""
+    cb.onEdit({ editId, kind: "image", file, originalSrc: img.getAttribute("data-original-src") || "" });
+    cb.onEdit({ editId, kind: "attr", attrName: "style", originalContent: "", value: newStyle });
+    enterCropMode(img, editId, origStyle, cb);
+  }
+  function enterCropMode(img, editId, origStyle, cb) {
+    img.dataset.cropActive = "1";
+    const doc = img.ownerDocument;
+    const hint = doc.createElement("div");
+    hint.className = "__crop-hint";
+    hint.textContent = "Drag to adjust crop \u2022 Drag corner to resize";
+    doc.body.appendChild(hint);
+    setTimeout(() => hint.remove(), 3500);
+    const handle = doc.createElement("div");
+    handle.className = "__resize-handle";
+    doc.body.appendChild(handle);
+    function positionHandle() {
+      const r = img.getBoundingClientRect();
+      const win2 = doc.defaultView;
+      handle.style.left = r.right + win2.scrollX - 8 + "px";
+      handle.style.top = r.bottom + win2.scrollY - 8 + "px";
+    }
+    positionHandle();
+    const win = doc.defaultView;
+    win.addEventListener("scroll", positionHandle);
+    win.addEventListener("resize", positionHandle);
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const sx2 = e.clientX, sy2 = e.clientY;
+      const sw = img.offsetWidth, sh = img.offsetHeight;
+      const onMove = (e2) => {
+        img.setAttribute("width", Math.max(20, Math.round(sw + e2.clientX - sx2)));
+        img.setAttribute("height", Math.max(20, Math.round(sh + e2.clientY - sy2)));
+        positionHandle();
+      };
+      const onUp = () => {
+        doc.removeEventListener("mousemove", onMove);
+        doc.removeEventListener("mouseup", onUp);
+        const w = img.getAttribute("width");
+        const h2 = img.getAttribute("height");
+        if (w) cb.onEdit({ editId, kind: "attr", attrName: "width", originalContent: "", value: w });
+        if (h2) cb.onEdit({ editId, kind: "attr", attrName: "height", originalContent: "", value: h2 });
+      };
+      doc.addEventListener("mousemove", onMove);
+      doc.addEventListener("mouseup", onUp);
+    });
+    let dragging = false, sx = 0, sy = 0, ox = 50, oy = 50;
+    function parsePos(s) {
+      const m = (s || "50% 50%").match(/([\d.]+)%\s+([\d.]+)%/);
+      return m ? [parseFloat(m[1]), parseFloat(m[2])] : [50, 50];
+    }
+    img.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      dragging = true;
+      sx = e.clientX;
+      sy = e.clientY;
+      [ox, oy] = parsePos(img.style.objectPosition);
+      img.style.cursor = "grabbing";
+    });
+    doc.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const rect = img.getBoundingClientRect();
+      const nx = Math.max(0, Math.min(100, ox - (e.clientX - sx) / rect.width * 100));
+      const ny = Math.max(0, Math.min(100, oy - (e.clientY - sy) / rect.height * 100));
+      img.style.objectPosition = `${nx.toFixed(1)}% ${ny.toFixed(1)}%`;
+    });
+    doc.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      img.style.cursor = "";
+      const pos = img.style.objectPosition || "50% 50%";
+      const [nx, ny] = parsePos(pos);
+      const updated = mergeStyle(origStyle, { "object-fit": "cover", "object-position": `${nx.toFixed(1)}% ${ny.toFixed(1)}%` });
+      img.setAttribute("style", updated);
+      cb.onEdit({ editId, kind: "attr", attrName: "style", originalContent: "", value: updated });
+      positionHandle();
     });
   }
   function commitHref(a, next, doc, cb, origText) {
@@ -8763,11 +8895,14 @@ a[href]{cursor:alias;}
 
   // src/app.js
   var isTauri = typeof window !== "undefined" && typeof window.__TAURI__ !== "undefined";
+  var IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|svg|avif|bmp|ico)$/i;
+  var IMAGE_MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", avif: "image/avif", bmp: "image/bmp", ico: "image/x-icon" };
   var fs = null;
   var session = null;
   var rootHandle = null;
   var currentPath = null;
   var currentRevoke = null;
+  var currentEditor = null;
   var navStack = [];
   function matchSite(name, sites) {
     const segs = (s) => s.split("/");
@@ -8798,11 +8933,12 @@ a[href]{cursor:alias;}
     const app = document.getElementById("app");
     app.innerHTML = "";
     els.pill = h("span", { class: "pill", id: "pill" }, "No folder open");
+    els.home = h("button", { class: "btn ghost home-btn", id: "homeBtn", title: "Back to home screen", onclick: closeSession, hidden: "" }, "\u2302 Home");
     els.back = h("button", { class: "btn ghost", id: "back", title: "Back", disabled: "", onclick: goBack }, "\u2039 Back");
     els.crumb = h("span", { class: "crumb", id: "crumb" }, "");
     els.hint = h("span", { class: "hint" }, "Click a link to open & edit it \xB7 Alt-click a link to change its address");
-    els.open = h("button", { class: "btn go", onclick: openFolder }, "Open site folder");
-    els.openFile = isTauri ? h("button", { class: "btn ghost", onclick: openFile, title: "Open a single .html file" }, "Open .html") : null;
+    els.pages = h("div", { class: "pages-menu", id: "pagesMenu", hidden: "" });
+    els.open = isTauri ? buildOpenMenu() : h("button", { class: "btn go", onclick: openFolder }, "Open site folder");
     els.discard = h("button", { class: "btn ghost", disabled: "", onclick: discardCurrent }, "Discard page");
     els.save = h(
       "button",
@@ -8815,12 +8951,13 @@ a[href]{cursor:alias;}
       { class: "topbar" },
       h("div", { class: "brand" }, h("b", {}, "HTML Site Editor"), h("small", {}, "edit any static site")),
       els.pill,
+      els.home,
+      els.pages,
       els.back,
       els.crumb,
       h("span", { class: "spacer" }),
       els.hint,
       els.open,
-      els.openFile,
       els.discard,
       els.save
     );
@@ -8829,6 +8966,9 @@ a[href]{cursor:alias;}
     els.stage = h("div", { class: "stage" }, els.frame, els.welcome);
     els.toast = h("div", { class: "toast", id: "toast" });
     app.append(els.bar, els.stage, els.toast);
+    document.addEventListener("click", (e) => {
+      if (els.pages && !els.pages.contains(e.target)) els.pages.classList.remove("open");
+    });
     if (isTauri) {
     } else if (inServerMode()) {
       bootServerMode();
@@ -8852,7 +8992,35 @@ a[href]{cursor:alias;}
     installDragAndDrop();
     if (/[?&]test=1/.test(location.search)) installTestApi();
   }
+  function buildOpenMenu() {
+    const menu = h("div", { class: "open-menu" });
+    const btn = h("button", { class: "btn go open-menu-trigger", onclick: (e) => {
+      e.stopPropagation();
+      menu.classList.toggle("open");
+    } }, "Open \u25BE");
+    const list = h(
+      "div",
+      { class: "open-menu-list" },
+      h("button", { class: "btn ghost open-menu-item", onclick: () => {
+        menu.classList.remove("open");
+        openFolder();
+      } }, "\u{1F4C1} Open site folder"),
+      h("button", { class: "btn ghost open-menu-item", onclick: () => {
+        menu.classList.remove("open");
+        openFile();
+      } }, "\u{1F4C4} Open HTML file")
+    );
+    menu.append(btn, list);
+    document.addEventListener("click", () => menu.classList.remove("open"));
+    return menu;
+  }
   function buildWelcome() {
+    const openActions = isTauri ? h(
+      "div",
+      { class: "welcome-actions" },
+      h("button", { class: "btn primary big", onclick: openFolder }, "\u{1F4C1} Open site folder"),
+      h("button", { class: "btn ghost big", onclick: openFile }, "\u{1F4C4} Open HTML file")
+    ) : h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder");
     return h(
       "div",
       { class: "welcome", id: "welcome" },
@@ -8860,29 +9028,24 @@ a[href]{cursor:alias;}
         "div",
         { class: "welcome-card" },
         h("h1", {}, "Edit your website"),
-        h("p", {}, "Open your site folder, click any text to edit it, swap images, and follow links to edit other pages \u2014 then Save All writes everything back to the real files."),
+        h("p", {}, "Open your site folder or a single HTML file, click any text to edit it, swap images, and follow links to edit other pages \u2014 then Save All writes everything back."),
         h(
           "ol",
           {},
-          h("li", { html: "Click <b>Open site folder</b> and choose the folder that holds your pages (e.g. <code>index.html</code>). Click <b>Allow</b>." }),
-          h("li", { html: "Click text to edit \xB7 <b>Ctrl/Cmd+B/I</b> for bold/italic \xB7 click an image to replace it." }),
-          h("li", { html: "Click a link to open and edit that page \xB7 <b>Alt-click</b> a link to change where it points." }),
+          h("li", { html: isTauri ? "Click <b>Open site folder</b> (or drag a folder / .html file onto the window)." : "Click <b>Open site folder</b> and choose the folder that holds your pages (e.g. <code>index.html</code>). Click <b>Allow</b>." }),
+          h("li", { html: "Click text to edit \xB7 <b>Ctrl/Cmd+B/I</b> for bold/italic \xB7 click an image to replace it \xB7 drag an image file onto an image slot." }),
+          h("li", { html: "Click a link to open and edit that page \xB7 use the <b>Pages</b> menu to jump to any page \xB7 <b>Alt-click</b> a link to change where it points." }),
           h("li", { html: "Click <b>Save All</b> (or <b>Ctrl/Cmd+S</b>). Only the bits you changed are written." })
         ),
         isTauri ? null : h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave\u2026), start the helper with <code>start.cmd</code>." }),
-        h(
-          "div",
-          { class: "welcome-actions" },
-          h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder"),
-          isTauri ? h("button", { class: "btn ghost big", onclick: openFile }, "Open a single .html file") : null
-        )
+        openActions
       )
     );
   }
   async function bootServerMode() {
     els.pill.textContent = "Helper connected";
     els.pill.className = "pill ok";
-    els.open.textContent = "Choose a site";
+    if (!isTauri) els.open.textContent = "Choose a site";
     const site = siteFromQuery();
     if (site) {
       await startSession(createServerFs(site), site);
@@ -8997,7 +9160,9 @@ a[href]{cursor:alias;}
     }
     els.pill.textContent = "Editing: " + name;
     els.pill.className = "pill ok";
+    els.home.hidden = false;
     await loadPage(start, false);
+    await refreshPagesMenu();
     showToast("Opened <b>" + escapeHtml(name) + "</b>. Edit text, swap images, follow links, then Save All.");
     return start;
   }
@@ -9010,6 +9175,68 @@ a[href]{cursor:alias;}
     if (htmls.includes("index.htm")) return "index.htm";
     htmls.sort();
     return htmls[0] || null;
+  }
+  async function refreshPagesMenu() {
+    const htmls = [];
+    try {
+      for await (const entry of fs.rootHandle.values()) {
+        if (entry.kind === "file" && /\.html?$/i.test(entry.name)) htmls.push(entry.name);
+      }
+    } catch {
+      return;
+    }
+    htmls.sort();
+    if (htmls.length < 2) {
+      els.pages.hidden = true;
+      return;
+    }
+    els.pages.innerHTML = "";
+    const btn = h("button", {
+      class: "btn ghost pages-trigger",
+      onclick: (e) => {
+        e.stopPropagation();
+        els.pages.classList.toggle("open");
+      }
+    }, "Pages \u25BE");
+    const list = h(
+      "div",
+      { class: "pages-list" },
+      ...htmls.map((name) => h("button", {
+        class: "btn ghost pages-item" + (name === currentPath ? " active" : ""),
+        onclick: () => {
+          els.pages.classList.remove("open");
+          loadPage(name, false);
+        }
+      }, name))
+    );
+    els.pages.append(btn, list);
+    els.pages.hidden = false;
+  }
+  function updatePagesActive() {
+    for (const item of els.pages.querySelectorAll(".pages-item")) {
+      item.classList.toggle("active", item.textContent === currentPath);
+    }
+  }
+  function closeSession() {
+    if (session && session.globalDirty()) {
+      if (!confirm("You have unsaved changes. Close anyway?")) return;
+    }
+    fs = null;
+    session = null;
+    currentPath = null;
+    currentEditor = null;
+    navStack.length = 0;
+    if (currentRevoke) {
+      currentRevoke();
+      currentRevoke = null;
+    }
+    els.frame.classList.remove("ready");
+    els.frame.srcdoc = "";
+    els.welcome.style.display = "grid";
+    els.home.hidden = true;
+    els.pages.hidden = true;
+    els.pages.innerHTML = "";
+    updateChrome();
   }
   async function loadPage(path, isBack) {
     let text;
@@ -9036,7 +9263,7 @@ a[href]{cursor:alias;}
       els.frame.srcdoc = preview.html;
     });
     const idoc = els.frame.contentDocument;
-    wireEditor(idoc, {
+    currentEditor = wireEditor(idoc, {
       onDirty: updateChrome,
       onEdit: (rec) => session.recordEdit(path, rec),
       onNavigate: (href) => navigate(path, href),
@@ -9051,6 +9278,7 @@ a[href]{cursor:alias;}
     els.welcome.style.display = "none";
     els.frame.classList.add("ready");
     updateChrome();
+    updatePagesActive();
   }
   function stampEditIds(rootDoc, pagePath, imgMap) {
     let id = 0;
@@ -9085,7 +9313,7 @@ a[href]{cursor:alias;}
   function navigate(fromPath, href) {
     const r = resolvePath(fromPath, href);
     if (!r) {
-      showToast("Can't open that link here.", true);
+      showToast("That link goes outside the open folder. To edit it too, open the parent folder instead.", true);
       return;
     }
     if (r.external) {
@@ -9134,7 +9362,7 @@ a[href]{cursor:alias;}
     showToast("Reverted this page to its last saved version.");
   }
   function installDragAndDrop() {
-    const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder or .html file to edit it");
+    const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder, .html file, or image onto an image slot");
     document.body.append(overlay);
     if (isTauri) {
       window.__TAURI__.webview.getCurrentWebview().onDragDropEvent(async (event) => {
@@ -9153,6 +9381,10 @@ a[href]{cursor:alias;}
         if (!paths || !paths.length) return;
         const p = paths[0];
         const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+        if (IMAGE_EXTS.test(name)) {
+          await handleTauriImageDrop(p, name, event.payload.position);
+          return;
+        }
         if (/\.html?$/i.test(name)) {
           await openTauriHtmlFile(p);
         } else {
@@ -9234,6 +9466,30 @@ a[href]{cursor:alias;}
       }
       showToast("Drop a site folder or <code>.html</code> file. (Chrome/Edge: any folder; Firefox/Brave: use the helper and pick from the list.)", true);
     });
+  }
+  async function handleTauriImageDrop(filePath, fileName, position) {
+    if (!currentEditor || !els.frame.contentDocument) {
+      showToast("Open a site first, then drop images onto an image slot.", true);
+      return;
+    }
+    const iframeRect = els.frame.getBoundingClientRect();
+    const x = (position ? position.x : 0) - iframeRect.left;
+    const y = (position ? position.y : 0) - iframeRect.top;
+    const el = els.frame.contentDocument.elementFromPoint(x, y);
+    const img = el && el.closest("img[data-edit-id]");
+    if (!img) {
+      showToast("Drop the image directly onto an image slot in the page.", true);
+      return;
+    }
+    try {
+      const bytes = await window.__TAURI__.core.invoke("read_bytes", { path: filePath });
+      const ext = fileName.split(".").pop().toLowerCase();
+      const mime = IMAGE_MIME[ext] || "image/*";
+      const file = new File([new Uint8Array(bytes)], fileName, { type: mime });
+      currentEditor.applyImageAt(img, file);
+    } catch (err) {
+      showToast("Couldn't read the image: " + (err && err.message), true);
+    }
   }
   function updateChrome() {
     const dirty = session && session.globalDirty();

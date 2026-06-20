@@ -194,3 +194,40 @@ test("buildSave preserves entities/quotes/comments elsewhere", () => {
     `<body><!-- keep --><p id='x' data-k="v">Edited</p>` +
     `<span>A&amp;B&nbsp;C</span><img src='a.jpg'><br></body></html>`);
 });
+
+// ---------- attr-add: inserting new attributes ----------
+
+test("buildSave adds a new attribute when the element lacks it", () => {
+  const html = DOC(`<img src="photo.jpg" width="300" height="200">`);
+  const id = editIdOf(html, "img");
+  const r = buildSave(html, [
+    { editId: id, kind: "attr", attrName: "style", originalContent: "", value: "object-fit:cover" },
+  ]);
+  assert.equal(r.skipped.length, 0);
+  assert.ok(r.applied.includes(id));
+  assert.ok(r.newHtml.includes('style="object-fit:cover"'), "style attr should be present");
+  assert.ok(r.newHtml.includes('src="photo.jpg"'), "existing src must be preserved");
+});
+
+test("buildSave inserts new attr before /> on self-closing void elements", () => {
+  const html = DOC(`<img src="x.png" width="10" height="10" />`);
+  const id = editIdOf(html, "img");
+  const r = buildSave(html, [
+    { editId: id, kind: "attr", attrName: "style", originalContent: "", value: "object-fit:cover" },
+  ]);
+  assert.equal(r.skipped.length, 0);
+  assert.ok(r.newHtml.includes('style="object-fit:cover"'));
+  // The /> must still be present (self-close preserved)
+  assert.ok(r.newHtml.includes("/>"));
+});
+
+test("buildSave replaces an existing attribute when it is already present", () => {
+  const html = DOC(`<img src="x.png" style="display:block">`);
+  const id = editIdOf(html, "img");
+  const r = buildSave(html, [
+    { editId: id, kind: "attr", attrName: "style", originalContent: "", value: "object-fit:cover;display:block" },
+  ]);
+  assert.equal(r.skipped.length, 0);
+  assert.ok(r.newHtml.includes('style="object-fit:cover;display:block"'));
+  assert.ok(!r.newHtml.includes('style="display:block"'), "old style value should be gone");
+});

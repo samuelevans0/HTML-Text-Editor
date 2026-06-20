@@ -132,6 +132,17 @@ export function sanityCheck(originalHtml, newHtml, splices) {
   return { ok: true };
 }
 
+// Find the position just before the closing > (or />) of a start tag
+// so a new attribute can be inserted there without replacing existing ones.
+function attrInsertPoint(html, startTagLoc) {
+  const raw = html.slice(startTagLoc.startOffset, startTagLoc.endOffset);
+  const gt = raw.lastIndexOf(">");
+  let pos = gt; // default: before >
+  if (pos > 0 && raw[pos - 1] === "/") pos--; // before />
+  while (pos > 0 && raw[pos - 1] === " ") pos--; // trim trailing spaces before />
+  return startTagLoc.startOffset + pos;
+}
+
 function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
@@ -161,11 +172,22 @@ export function buildSave(originalHtml, edits) {
       applied.push(edit.editId);
     } else if (edit.kind === "attr") {
       const range = attrToken(node, edit.attrName);
-      if (!range) { skipped.push({ editId: edit.editId, reason: "attribute not found" }); continue; }
-      const replacement = `${edit.attrName}="${escapeAttr(edit.value)}"`;
-      if (originalHtml.slice(range[0], range[1]) === replacement) continue; // no-op
-      splices.push({ range, replacement });
-      applied.push(edit.editId);
+      if (range) {
+        const replacement = `${edit.attrName}="${escapeAttr(edit.value)}"`;
+        if (originalHtml.slice(range[0], range[1]) === replacement) continue; // no-op
+        splices.push({ range, replacement });
+        applied.push(edit.editId);
+      } else {
+        // Attribute doesn't exist — insert before the closing > of the start tag.
+        const loc = node.sourceCodeLocation;
+        if (!loc || !loc.startTag) {
+          skipped.push({ editId: edit.editId, reason: "attribute not found and no start tag" });
+          continue;
+        }
+        const insertAt = attrInsertPoint(originalHtml, loc.startTag);
+        splices.push({ range: [insertAt, insertAt], replacement: ` ${edit.attrName}="${escapeAttr(edit.value)}"` });
+        applied.push(edit.editId);
+      }
     } else {
       skipped.push({ editId: edit.editId, reason: "unknown edit kind" });
     }
