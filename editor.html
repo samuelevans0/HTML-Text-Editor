@@ -70,6 +70,8 @@ iframe.ready { display: block; }
 /* welcome */
 .welcome { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; text-align: center; background: var(--bg); }
 .welcome-card { max-width: 36rem; }
+.welcome-actions { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; justify-content: center; margin-top: 1.2rem; }
+.welcome-actions .btn.big { margin-top: 0; }
 .welcome h1 { font-size: 1.7rem; margin: 0 0 .5rem; }
 .welcome p { color: var(--muted); line-height: 1.6; margin: .5rem 0; }
 .welcome ol { text-align: left; color: rgba(231,233,238,.85); line-height: 1.8; margin: 1.3rem auto; max-width: 32rem; }
@@ -8124,11 +8126,41 @@ iframe.ready { display: block; }
     const { byEditId } = parseSource(html);
     return [...byEditId.entries()].sort((a, b) => a[0] - b[0]).map(([, n]) => n.tagName);
   }
-  function sanityCheck(originalHtml, newHtml) {
-    const a = elementTagSequence(originalHtml);
-    const b = elementTagSequence(newHtml);
+  function elementOffsets(html) {
+    const document2 = parse(html, { sourceCodeLocationInfo: true });
+    const out = [];
+    (function walk(n) {
+      for (const c of n.childNodes || []) {
+        if (isElement(c)) {
+          const loc = c.sourceCodeLocation;
+          out.push({ tag: c.tagName, off: loc ? loc.startOffset : -1 });
+        }
+        walk(c);
+      }
+    })(document2);
+    return out;
+  }
+  var offsetInAnyRange = (off, ranges) => off >= 0 && ranges.some(([s, e]) => off >= s && off < e);
+  function tagsOutsideRanges(html, ranges) {
+    return elementOffsets(html).filter((el) => !offsetInAnyRange(el.off, ranges)).map((el) => el.tag);
+  }
+  function shiftedRanges(splices) {
+    const sorted = [...splices].sort((a, b) => a.range[0] - b.range[0]);
+    const out = [];
+    let shift = 0;
+    for (const { range: [s, e], replacement } of sorted) {
+      const ns = s + shift;
+      out.push([ns, ns + replacement.length]);
+      shift += replacement.length - (e - s);
+    }
+    return out;
+  }
+  function sanityCheck(originalHtml, newHtml, splices) {
+    const a = splices ? tagsOutsideRanges(originalHtml, splices.map((s) => s.range)) : elementTagSequence(originalHtml);
+    const b = splices ? tagsOutsideRanges(newHtml, shiftedRanges(splices)) : elementTagSequence(newHtml);
     if (a.length !== b.length) {
-      return { ok: false, reason: `element count changed ${a.length} -> ${b.length}` };
+      const where = splices ? "structure changed outside edits" : "element count changed";
+      return { ok: false, reason: `${where} ${a.length} -> ${b.length}` };
     }
     for (let i = 0; i < a.length; i++) {
       if (a[i] !== b[i]) return { ok: false, reason: `element ${i} changed ${a[i]} -> ${b[i]}` };
@@ -8182,7 +8214,7 @@ iframe.ready { display: block; }
     } catch (e) {
       return { newHtml: originalHtml, applied: [], skipped: [{ editId: -1, reason: e.message }] };
     }
-    const sane = sanityCheck(originalHtml, newHtml);
+    const sane = sanityCheck(originalHtml, newHtml, splices);
     if (!sane.ok) {
       return { newHtml: originalHtml, applied: [], skipped: [{ editId: -1, reason: "sanity: " + sane.reason }] };
     }
@@ -8713,46 +8745,20 @@ a[href]{cursor:alias;}
       }
     };
   }
-  function createTauriSingleFileFs(filePath) {
-    const name = filePath.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-    const call = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
-    return {
-      rootHandle: {
-        name,
-        async *values() {
-          yield { kind: "file", name };
-        }
-      },
-      async readText() {
-        return call("read_text", { path: filePath });
-      },
-      async readBytes() {
-        const bytes = await call("read_bytes", { path: filePath });
-        return new Blob([new Uint8Array(bytes)]);
-      },
-      async writeText(_p, text) {
-        await call("write_text", { path: filePath, text });
-      },
-      async writeBytes(_p, blob) {
-        const buf = await (blob instanceof Blob ? blob : new Blob([blob])).arrayBuffer();
-        await call("write_bytes", {
-          path: filePath,
-          bytes: Array.from(new Uint8Array(buf))
-        });
-      },
-      async exists(p) {
-        return p === name;
-      },
-      async uniqueName(_dir, base) {
-        return base;
-      }
-    };
-  }
   async function pickTauriFolder() {
     const result = await window.__TAURI__.dialog.open({ directory: true, multiple: false });
     if (!result) return null;
     const path = typeof result === "string" ? result : result[0];
     return createTauriFs(path);
+  }
+  async function pickTauriFile() {
+    const result = await window.__TAURI__.dialog.open({
+      directory: false,
+      multiple: false,
+      filters: [{ name: "HTML", extensions: ["html", "htm"] }]
+    });
+    if (!result) return null;
+    return typeof result === "string" ? result : result[0];
   }
 
   // src/app.js
@@ -8796,6 +8802,7 @@ a[href]{cursor:alias;}
     els.crumb = h("span", { class: "crumb", id: "crumb" }, "");
     els.hint = h("span", { class: "hint" }, "Click a link to open & edit it \xB7 Alt-click a link to change its address");
     els.open = h("button", { class: "btn go", onclick: openFolder }, "Open site folder");
+    els.openFile = isTauri ? h("button", { class: "btn ghost", onclick: openFile, title: "Open a single .html file" }, "Open .html") : null;
     els.discard = h("button", { class: "btn ghost", disabled: "", onclick: discardCurrent }, "Discard page");
     els.save = h(
       "button",
@@ -8813,6 +8820,7 @@ a[href]{cursor:alias;}
       h("span", { class: "spacer" }),
       els.hint,
       els.open,
+      els.openFile,
       els.discard,
       els.save
     );
@@ -8862,7 +8870,12 @@ a[href]{cursor:alias;}
           h("li", { html: "Click <b>Save All</b> (or <b>Ctrl/Cmd+S</b>). Only the bits you changed are written." })
         ),
         isTauri ? null : h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave\u2026), start the helper with <code>start.cmd</code>." }),
-        h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder")
+        h(
+          "div",
+          { class: "welcome-actions" },
+          h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder"),
+          isTauri ? h("button", { class: "btn ghost big", onclick: openFile }, "Open a single .html file") : null
+        )
       )
     );
   }
@@ -8959,11 +8972,25 @@ a[href]{cursor:alias;}
     }
     await startSession(createFs(rootHandle), rootHandle.name);
   }
-  async function startSession(theFs, name) {
+  async function openFile() {
+    const filePath = await pickTauriFile();
+    if (!filePath) return;
+    await openTauriHtmlFile(filePath);
+  }
+  function splitPath(p) {
+    const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+    const folder = p.slice(0, p.length - name.length).replace(/[\\/]+$/, "");
+    return [folder, name];
+  }
+  async function openTauriHtmlFile(filePath) {
+    const [folder, name] = splitPath(filePath);
+    await startSession(createTauriFs(folder), name, name);
+  }
+  async function startSession(theFs, name, startPage) {
     fs = theFs;
     session = createSession(fs);
     navStack.length = 0;
-    const start = await findStartPage(fs);
+    const start = startPage || await findStartPage(fs);
     if (!start) {
       showToast("That folder has no <code>.html</code> pages. Pick the folder that holds your website.", true);
       return null;
@@ -9127,7 +9154,7 @@ a[href]{cursor:alias;}
         const p = paths[0];
         const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
         if (/\.html?$/i.test(name)) {
-          await startSession(createTauriSingleFileFs(p), name);
+          await openTauriHtmlFile(p);
         } else {
           await startSession(createTauriFs(p), name);
         }

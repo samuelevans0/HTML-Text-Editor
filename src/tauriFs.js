@@ -54,41 +54,20 @@ export function createTauriFs(rootPath) {
   };
 }
 
-// Wraps a single .html file as a minimal single-file fs.
-// Used when the user drags a standalone .html file onto the window.
-export function createTauriSingleFileFs(filePath) {
-  const name = filePath.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-  const call = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
-  return {
-    rootHandle: {
-      name,
-      async *values() { yield { kind: "file", name }; },
-    },
-    async readText() {
-      return call("read_text", { path: filePath });
-    },
-    async readBytes() {
-      const bytes = await call("read_bytes", { path: filePath });
-      return new Blob([new Uint8Array(bytes)]);
-    },
-    async writeText(_p, text) {
-      await call("write_text", { path: filePath, text });
-    },
-    async writeBytes(_p, blob) {
-      const buf = await (blob instanceof Blob ? blob : new Blob([blob])).arrayBuffer();
-      await call("write_bytes", {
-        path: filePath,
-        bytes: Array.from(new Uint8Array(buf)),
-      });
-    },
-    async exists(p) { return p === name; },
-    async uniqueName(_dir, base) { return base; },
-  };
-}
-
 export async function pickTauriFolder() {
   const result = await window.__TAURI__.dialog.open({ directory: true, multiple: false });
   if (!result) return null;
   const path = typeof result === "string" ? result : result[0];
   return createTauriFs(path);
+}
+
+// Native file picker filtered to .html/.htm. Returns the chosen absolute path, or null.
+export async function pickTauriFile() {
+  const result = await window.__TAURI__.dialog.open({
+    directory: false,
+    multiple: false,
+    filters: [{ name: "HTML", extensions: ["html", "htm"] }],
+  });
+  if (!result) return null;
+  return typeof result === "string" ? result : result[0];
 }

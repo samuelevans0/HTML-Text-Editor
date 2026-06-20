@@ -76,11 +76,55 @@ export function elementTagSequence(html) {
   return [...byEditId.entries()].sort((a, b) => a[0] - b[0]).map(([, n]) => n.tagName);
 }
 
-export function sanityCheck(originalHtml, newHtml) {
-  const a = elementTagSequence(originalHtml);
-  const b = elementTagSequence(newHtml);
+// Preorder [{tag, off}] for every element (off = source start offset, -1 if implied).
+function elementOffsets(html) {
+  const document = parse(html, { sourceCodeLocationInfo: true });
+  const out = [];
+  (function walk(n) {
+    for (const c of n.childNodes || []) {
+      if (isElement(c)) {
+        const loc = c.sourceCodeLocation;
+        out.push({ tag: c.tagName, off: loc ? loc.startOffset : -1 });
+      }
+      walk(c);
+    }
+  })(document);
+  return out;
+}
+
+const offsetInAnyRange = (off, ranges) => off >= 0 && ranges.some(([s, e]) => off >= s && off < e);
+
+// Tags of elements whose start offset is NOT inside any of the given ranges.
+function tagsOutsideRanges(html, ranges) {
+  return elementOffsets(html).filter((el) => !offsetInAnyRange(el.off, ranges)).map((el) => el.tag);
+}
+
+// Map original splice ranges to their positions in the post-splice (new) html.
+function shiftedRanges(splices) {
+  const sorted = [...splices].sort((a, b) => a.range[0] - b.range[0]);
+  const out = [];
+  let shift = 0;
+  for (const { range: [s, e], replacement } of sorted) {
+    const ns = s + shift;
+    out.push([ns, ns + replacement.length]);
+    shift += replacement.length - (e - s);
+  }
+  return out;
+}
+
+// Verify the edit didn't corrupt the document. When `splices` (the edited inner
+// ranges) are given, structure *inside* edited blocks is ignored — the editor
+// legitimately adds inline tags there (<br>, <b>, <i>, <a>) — and only elements
+// outside every edit must stay identical. Without `splices`, every element must
+// match (strict structural equality).
+export function sanityCheck(originalHtml, newHtml, splices) {
+  const a = splices ? tagsOutsideRanges(originalHtml, splices.map((s) => s.range))
+                    : elementTagSequence(originalHtml);
+  const b = splices ? tagsOutsideRanges(newHtml, shiftedRanges(splices))
+                    : elementTagSequence(newHtml);
   if (a.length !== b.length) {
-    return { ok: false, reason: `element count changed ${a.length} -> ${b.length}` };
+    const where = splices ? "structure changed outside edits" : "element count changed";
+    return { ok: false, reason: `${where} ${a.length} -> ${b.length}` };
   }
   for (let i = 0; i < a.length; i++) {
     if (a[i] !== b[i]) return { ok: false, reason: `element ${i} changed ${a[i]} -> ${b[i]}` };
@@ -133,7 +177,7 @@ export function buildSave(originalHtml, edits) {
   } catch (e) {
     return { newHtml: originalHtml, applied: [], skipped: [{ editId: -1, reason: e.message }] };
   }
-  const sane = sanityCheck(originalHtml, newHtml);
+  const sane = sanityCheck(originalHtml, newHtml, splices);
   if (!sane.ok) {
     return { newHtml: originalHtml, applied: [], skipped: [{ editId: -1, reason: "sanity: " + sane.reason }] };
   }

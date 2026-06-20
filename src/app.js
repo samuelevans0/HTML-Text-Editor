@@ -5,7 +5,7 @@ import { buildPreview } from "./assets.js";
 import { wireEditor } from "./editor.js";
 import { resolvePath, isHtml } from "./paths.js";
 import { inServerMode, siteFromQuery, fetchSites, createServerFs } from "./serverFs.js";
-import { createTauriFs, createTauriSingleFileFs, pickTauriFolder } from "./tauriFs.js";
+import { createTauriFs, pickTauriFolder, pickTauriFile } from "./tauriFs.js";
 
 const isTauri = typeof window !== "undefined" && typeof window.__TAURI__ !== "undefined";
 
@@ -57,6 +57,7 @@ export function bootApp() {
   els.crumb = h("span", { class: "crumb", id: "crumb" }, "");
   els.hint = h("span", { class: "hint" }, "Click a link to open & edit it · Alt-click a link to change its address");
   els.open = h("button", { class: "btn go", onclick: openFolder }, "Open site folder");
+  els.openFile = isTauri ? h("button", { class: "btn ghost", onclick: openFile, title: "Open a single .html file" }, "Open .html") : null;
   els.discard = h("button", { class: "btn ghost", disabled: "", onclick: discardCurrent }, "Discard page");
   els.save = h("button", { class: "btn primary", id: "save", disabled: "", onclick: saveAll },
     "Save All ", h("span", { class: "dot", id: "dot", hidden: "" }, "●"));
@@ -65,7 +66,7 @@ export function bootApp() {
     h("div", { class: "brand" }, h("b", {}, "HTML Site Editor"), h("small", {}, "edit any static site")),
     els.pill, els.back, els.crumb,
     h("span", { class: "spacer" }), els.hint,
-    els.open, els.discard, els.save);
+    els.open, els.openFile, els.discard, els.save);
 
   els.frame = h("iframe", { id: "frame", title: "Page preview" });
   els.welcome = buildWelcome();
@@ -109,7 +110,9 @@ function buildWelcome() {
         h("li", { html: "Click a link to open and edit that page · <b>Alt-click</b> a link to change where it points." }),
         h("li", { html: "Click <b>Save All</b> (or <b>Ctrl/Cmd+S</b>). Only the bits you changed are written." })),
       isTauri ? null : h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave…), start the helper with <code>start.cmd</code>." }),
-      h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder")));
+      h("div", { class: "welcome-actions" },
+        h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder"),
+        isTauri ? h("button", { class: "btn ghost big", onclick: openFile }, "Open a single .html file") : null)));
 }
 
 // ---- server mode ----
@@ -190,11 +193,33 @@ async function openFolder() {
   await startSession(createFs(rootHandle), rootHandle.name);
 }
 
-async function startSession(theFs, name) {
+// Open a single .html file (Tauri only): root the fs at the file's folder and
+// open that file directly, so its CSS/images resolve like a folder would.
+async function openFile() {
+  const filePath = await pickTauriFile();
+  if (!filePath) return; // cancelled
+  await openTauriHtmlFile(filePath);
+}
+
+// Split a full path into [folder, filename] (handles \ and /).
+function splitPath(p) {
+  const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  const folder = p.slice(0, p.length - name.length).replace(/[\\/]+$/, "");
+  return [folder, name];
+}
+
+async function openTauriHtmlFile(filePath) {
+  const [folder, name] = splitPath(filePath);
+  await startSession(createTauriFs(folder), name, name);
+}
+
+async function startSession(theFs, name, startPage) {
   fs = theFs;
   session = createSession(fs);
   navStack.length = 0;
-  const start = await findStartPage(fs);
+  // startPage lets a single dropped/picked .html open directly while the fs is
+  // rooted at its folder (so its CSS/images still resolve).
+  const start = startPage || await findStartPage(fs);
   if (!start) {
     showToast("That folder has no <code>.html</code> pages. Pick the folder that holds your website.", true);
     return null;
@@ -361,7 +386,7 @@ function installDragAndDrop() {
       const p = paths[0];
       const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
       if (/\.html?$/i.test(name)) {
-        await startSession(createTauriSingleFileFs(p), name);
+        await openTauriHtmlFile(p); // root at the file's folder so CSS/images resolve
       } else {
         await startSession(createTauriFs(p), name);
       }

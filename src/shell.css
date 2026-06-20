@@ -63,6 +63,8 @@ iframe.ready { display: block; }
 /* welcome */
 .welcome { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; text-align: center; background: var(--bg); }
 .welcome-card { max-width: 36rem; }
+.welcome-actions { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; justify-content: center; margin-top: 1.2rem; }
+.welcome-actions .btn.big { margin-top: 0; }
 .welcome h1 { font-size: 1.7rem; margin: 0 0 .5rem; }
 .welcome p { color: var(--muted); line-height: 1.6; margin: .5rem 0; }
 .welcome ol { text-align: left; color: rgba(231,233,238,.85); line-height: 1.8; margin: 1.3rem auto; max-width: 32rem; }
