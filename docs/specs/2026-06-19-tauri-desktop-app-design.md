@@ -203,6 +203,16 @@ These files stay in the repo (browser workflow still works), they just aren't us
 
 ---
 
+## Security posture (accepted risks)
+
+This is a **local, single-user desktop tool**. The threat model is "the user opens and edits their own files." Within that model:
+
+- **Unsandboxed file commands.** The six Rust commands accept an arbitrary absolute `path` from the webview and read/write it with no path allow-listing. This is acceptable because the webview only ever sends paths the user picked or dropped — the same access the browser File System Access API already grants in the `editor.html` workflow. The frontend is trusted, locally-built code.
+- **`csp: null`.** CSP is disabled so the editor preview iframe can load `blob:` URLs for images/scripts. The only remote-content vector would be a malicious edited site reaching `window.__TAURI__`; it can't — edited site scripts are neutralized (the guard script in `src/assets.js`) and the preview iframe has no access to the host's `window.__TAURI__`.
+- **Revisit if** the app ever loads remote/untrusted content into the host window, or ships to multi-user/elevated contexts. Then: add a CSP, and restrict the Rust commands to a chosen root directory.
+
+---
+
 ## Testing
 
 - Existing unit tests (`npm test`) are unaffected — they run in Node, don't touch Tauri APIs.

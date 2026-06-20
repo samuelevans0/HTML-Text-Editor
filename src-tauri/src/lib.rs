@@ -34,6 +34,10 @@ fn write_bytes(path: String, bytes: Vec<u8>) -> Result<(), String> {
     fs::write(&path, bytes).map_err(|e| e.to_string())
 }
 
+// Intentionally never returns Err: this mirrors the createFs().exists() contract
+// (src/fsAccess.js) which returns false on ANY error. Callers guard reads with
+// `!(await fs.exists(...))` (e.g. src/assets.js) — making this throw would break
+// preview rendering and uniqueName(). Do not "fix" it to use fs::try_exists.
 #[tauri::command]
 fn path_exists(path: String) -> Result<bool, String> {
     Ok(Path::new(&path).exists())
