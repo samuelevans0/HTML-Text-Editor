@@ -8662,7 +8662,101 @@ a[href]{cursor:alias;}
     return api;
   }
 
+  // src/tauriFs.js
+  function abs(rootPath, relPath) {
+    const base = rootPath.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+    return base + "/" + relPath;
+  }
+  function createTauriFs(rootPath) {
+    const name = rootPath.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+    const call = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+    return {
+      rootHandle: {
+        name,
+        async *values() {
+          const entries = await call("list_dir", { path: rootPath });
+          for (const e of entries) {
+            yield { kind: e.is_dir ? "directory" : "file", name: e.name };
+          }
+        }
+      },
+      async readText(relPath) {
+        return call("read_text", { path: abs(rootPath, relPath) });
+      },
+      async readBytes(relPath) {
+        const bytes = await call("read_bytes", { path: abs(rootPath, relPath) });
+        return new Blob([new Uint8Array(bytes)]);
+      },
+      async writeText(relPath, text) {
+        await call("write_text", { path: abs(rootPath, relPath), text });
+      },
+      async writeBytes(relPath, blob) {
+        const buf = await (blob instanceof Blob ? blob : new Blob([blob])).arrayBuffer();
+        await call("write_bytes", {
+          path: abs(rootPath, relPath),
+          bytes: Array.from(new Uint8Array(buf))
+        });
+      },
+      async exists(relPath) {
+        return call("path_exists", { path: abs(rootPath, relPath) });
+      },
+      async uniqueName(dirPath, baseName) {
+        const dot = baseName.lastIndexOf(".");
+        const stem = dot > 0 ? baseName.slice(0, dot) : baseName;
+        const ext = dot > 0 ? baseName.slice(dot) : "";
+        let nm = baseName, i = 0;
+        while (await call("path_exists", { path: abs(rootPath, (dirPath ? dirPath + "/" : "") + nm) })) {
+          i++;
+          nm = `${stem}-${i}${ext}`;
+        }
+        return nm;
+      }
+    };
+  }
+  function createTauriSingleFileFs(filePath) {
+    const name = filePath.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+    const call = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+    return {
+      rootHandle: {
+        name,
+        async *values() {
+          yield { kind: "file", name };
+        }
+      },
+      async readText() {
+        return call("read_text", { path: filePath });
+      },
+      async readBytes() {
+        const bytes = await call("read_bytes", { path: filePath });
+        return new Blob([new Uint8Array(bytes)]);
+      },
+      async writeText(_p, text) {
+        await call("write_text", { path: filePath, text });
+      },
+      async writeBytes(_p, blob) {
+        const buf = await (blob instanceof Blob ? blob : new Blob([blob])).arrayBuffer();
+        await call("write_bytes", {
+          path: filePath,
+          bytes: Array.from(new Uint8Array(buf))
+        });
+      },
+      async exists(p) {
+        return p === name;
+      },
+      async uniqueName(_dir, base) {
+        return base;
+      }
+    };
+  }
+  async function pickTauriFolder() {
+    const result = await window.__TAURI__.dialog.open({ directory: true, multiple: false });
+    if (!result) return null;
+    const path = typeof result === "string" ? result : result[0];
+    return createTauriFs(path);
+  }
+
   // src/app.js
+  var isTauri = typeof window !== "undefined" && typeof window.__TAURI__ !== "undefined";
   var fs = null;
   var session = null;
   var rootHandle = null;
@@ -8727,7 +8821,8 @@ a[href]{cursor:alias;}
     els.stage = h("div", { class: "stage" }, els.frame, els.welcome);
     els.toast = h("div", { class: "toast", id: "toast" });
     app.append(els.bar, els.stage, els.toast);
-    if (inServerMode()) {
+    if (isTauri) {
+    } else if (inServerMode()) {
       bootServerMode();
     } else if (!supported()) {
       els.pill.textContent = "Needs the launcher";
@@ -8766,7 +8861,7 @@ a[href]{cursor:alias;}
           h("li", { html: "Click a link to open and edit that page \xB7 <b>Alt-click</b> a link to change where it points." }),
           h("li", { html: "Click <b>Save All</b> (or <b>Ctrl/Cmd+S</b>). Only the bits you changed are written." })
         ),
-        h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave\u2026), start the helper with <code>start.cmd</code>." }),
+        isTauri ? null : h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave\u2026), start the helper with <code>start.cmd</code>." }),
         h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder")
       )
     );
@@ -8844,6 +8939,12 @@ a[href]{cursor:alias;}
     };
   }
   async function openFolder() {
+    if (isTauri) {
+      const tFs = await pickTauriFolder();
+      if (!tFs) return;
+      await startSession(tFs, tFs.rootHandle.name);
+      return;
+    }
     if (inServerMode()) return showSitePicker();
     if (!supported()) {
       showToast("This browser can't save files directly. Start the helper \u2014 double-click <code>start.cmd</code> \u2014 and use the link it opens.", true);
@@ -9006,9 +9107,34 @@ a[href]{cursor:alias;}
     showToast("Reverted this page to its last saved version.");
   }
   function installDragAndDrop() {
-    let sitesCache = null;
     const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder or .html file to edit it");
     document.body.append(overlay);
+    if (isTauri) {
+      window.__TAURI__.webview.getCurrentWebview().onDragDropEvent(async (event) => {
+        const type = event.payload.type;
+        if (type === "hover") {
+          overlay.classList.add("show");
+          return;
+        }
+        if (type === "leave" || type === "cancelled") {
+          overlay.classList.remove("show");
+          return;
+        }
+        if (type !== "drop") return;
+        overlay.classList.remove("show");
+        const paths = event.payload.paths;
+        if (!paths || !paths.length) return;
+        const p = paths[0];
+        const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+        if (/\.html?$/i.test(name)) {
+          await startSession(createTauriSingleFileFs(p), name);
+        } else {
+          await startSession(createTauriFs(p), name);
+        }
+      });
+      return;
+    }
+    let sitesCache = null;
     let depth = 0;
     window.addEventListener("dragenter", (e) => {
       e.preventDefault();

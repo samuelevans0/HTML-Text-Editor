@@ -7,3 +7,11 @@ helper
 build/sea-bundle.cjs
 build/sea-prep.blob
 build/sea-config.json
+
+# Tauri build output
+dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/icon-source.png
+app-build/
+.superpowers/
