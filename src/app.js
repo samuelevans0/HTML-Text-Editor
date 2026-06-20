@@ -5,6 +5,9 @@ import { buildPreview } from "./assets.js";
 import { wireEditor } from "./editor.js";
 import { resolvePath, isHtml } from "./paths.js";
 import { inServerMode, siteFromQuery, fetchSites, createServerFs } from "./serverFs.js";
+import { createTauriFs, createTauriSingleFileFs, pickTauriFolder } from "./tauriFs.js";
+
+const isTauri = typeof window !== "undefined" && typeof window.__TAURI__ !== "undefined";
 
 let fs = null;
 let session = null;
@@ -71,7 +74,9 @@ export function bootApp() {
 
   app.append(els.bar, els.stage, els.toast);
 
-  if (inServerMode()) {
+  if (isTauri) {
+    // Native file access via Tauri — no server or browser API needed.
+  } else if (inServerMode()) {
     bootServerMode();
   } else if (!supported()) {
     els.pill.textContent = "Needs the launcher";
@@ -103,7 +108,7 @@ function buildWelcome() {
         h("li", { html: "Click text to edit · <b>Ctrl/Cmd+B/I</b> for bold/italic · click an image to replace it." }),
         h("li", { html: "Click a link to open and edit that page · <b>Alt-click</b> a link to change where it points." }),
         h("li", { html: "Click <b>Save All</b> (or <b>Ctrl/Cmd+S</b>). Only the bits you changed are written." })),
-      h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave…), start the helper with <code>start.cmd</code>." }),
+      isTauri ? null : h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave…), start the helper with <code>start.cmd</code>." }),
       h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder")));
 }
 
@@ -164,6 +169,12 @@ function createSingleFileFs(fileHandle) {
 
 // ---- open (file:// File System Access) ----
 async function openFolder() {
+  if (isTauri) {
+    const tFs = await pickTauriFolder();
+    if (!tFs) return; // user cancelled the picker
+    await startSession(tFs, tFs.rootHandle.name);
+    return;
+  }
   if (inServerMode()) return showSitePicker();
   if (!supported()) {
     showToast("This browser can't save files directly. Start the helper — double-click <code>start.cmd</code> — and use the link it opens.", true);
@@ -333,9 +344,33 @@ function discardCurrent() {
 
 // ---- drag and drop ----
 function installDragAndDrop() {
-  let sitesCache = null;
   const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder or .html file to edit it");
   document.body.append(overlay);
+
+  if (isTauri) {
+    // Tauri intercepts drag events before the webview sees them.
+    // DragDropEvent types: "hover", "drop", "leave", "cancelled".
+    window.__TAURI__.webview.getCurrentWebview().onDragDropEvent(async (event) => {
+      const type = event.payload.type;
+      if (type === "hover") { overlay.classList.add("show"); return; }
+      if (type === "leave" || type === "cancelled") { overlay.classList.remove("show"); return; }
+      if (type !== "drop") return;
+      overlay.classList.remove("show");
+      const paths = event.payload.paths;
+      if (!paths || !paths.length) return;
+      const p = paths[0];
+      const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+      if (/\.html?$/i.test(name)) {
+        await startSession(createTauriSingleFileFs(p), name);
+      } else {
+        await startSession(createTauriFs(p), name);
+      }
+    });
+    return;
+  }
+
+  // Browser (non-Tauri) drag-and-drop handlers below.
+  let sitesCache = null;
   let depth = 0;
   window.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; overlay.classList.add("show"); });
   window.addEventListener("dragover", (e) => e.preventDefault());
@@ -345,9 +380,6 @@ function installDragAndDrop() {
     const item = e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items[0];
     if (!item) return;
 
-    // Chromium path: get a handle directly from the drag event so we can open
-    // ANY folder or .html file, regardless of whether it's under the helper.
-    // Only wrap the handle acquisition in try/catch — startSession errors surface normally.
     if (typeof item.getAsFileSystemHandle === "function") {
       let handle = null;
       try { handle = await item.getAsFileSystemHandle(); } catch {}
@@ -366,8 +398,6 @@ function installDragAndDrop() {
       }
     }
 
-    // Non-Chromium (Firefox, Brave with Shields, …): no File System Access API.
-    // In server mode we can only open folders the helper already knows about.
     const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
     if (entry && entry.isDirectory) {
       if (!inServerMode()) {
