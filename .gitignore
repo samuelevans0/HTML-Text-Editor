@@ -15,3 +15,6 @@ src-tauri/gen/
 src-tauri/icon-source.png
 app-build/
 .superpowers/
+.impeccable/
+docs/plans/
+docs/specs/
