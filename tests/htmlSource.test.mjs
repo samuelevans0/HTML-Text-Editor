@@ -102,6 +102,21 @@ test("sanityCheck fails when an element appears/disappears", () => {
   assert.equal(sanityCheck(a, bad).ok, false);
 });
 
+test("sanityCheck with edit ranges allows inline elements added inside the edit", () => {
+  const a = `<!DOCTYPE html><html><body><p>hello world</p><p>after</p></body></html>`;
+  const b = `<!DOCTYPE html><html><body><p>hello<br>world <b>x</b></p><p>after</p></body></html>`;
+  // The first <p> inner range in `a` is "hello world".
+  const range = [a.indexOf("hello world"), a.indexOf("hello world") + "hello world".length];
+  assert.equal(sanityCheck(a, b, [{ range, replacement: "hello<br>world <b>x</b>" }]).ok, true);
+});
+
+test("sanityCheck with edit ranges still catches structure changed outside the edit", () => {
+  const a = `<!DOCTYPE html><html><body><p>aaa</p><p>bbb</p></body></html>`;
+  const bad = `<!DOCTYPE html><html><body><p>aaa</p></body></html>`; // 2nd <p> vanished
+  const range = [a.indexOf("aaa"), a.indexOf("aaa") + 3];
+  assert.equal(sanityCheck(a, bad, [{ range, replacement: "aaa" }]).ok, false);
+});
+
 // ---------- Task 6: buildSave orchestration ----------
 
 test("buildSave patches one heading, rest byte-identical", () => {
@@ -144,6 +159,17 @@ test("buildSave skips when identity check fails", () => {
   assert.equal(r.skipped[0].editId, id);
 });
 
+test("buildSave applies a text edit that adds inline formatting (br/bold)", () => {
+  const html = DOC(`<p>hello world</p><p>after</p>`);
+  const id = editIdOf(html, "p");
+  const r = buildSave(html, [
+    { editId: id, kind: "text", originalContent: "hello world", replacement: "hello<br>world <b>bold</b>" },
+  ]);
+  assert.equal(r.newHtml, DOC(`<p>hello<br>world <b>bold</b></p><p>after</p>`));
+  assert.deepEqual(r.applied, [id]);
+  assert.deepEqual(r.skipped, []);
+});
+
 test("buildSave drops a no-op text edit", () => {
   const html = DOC(`<h1>Same</h1>`);
   const id = editIdOf(html, "h1");
@@ -167,4 +193,41 @@ test("buildSave preserves entities/quotes/comments elsewhere", () => {
     `<!DOCTYPE html><html><head><title>t</title></head>` +
     `<body><!-- keep --><p id='x' data-k="v">Edited</p>` +
     `<span>A&amp;B&nbsp;C</span><img src='a.jpg'><br></body></html>`);
+});
+
+// ---------- attr-add: inserting new attributes ----------
+
+test("buildSave adds a new attribute when the element lacks it", () => {
+  const html = DOC(`<img src="photo.jpg" width="300" height="200">`);
+  const id = editIdOf(html, "img");
+  const r = buildSave(html, [
+    { editId: id, kind: "attr", attrName: "style", originalContent: "", value: "object-fit:cover" },
+  ]);
+  assert.equal(r.skipped.length, 0);
+  assert.ok(r.applied.includes(id));
+  assert.ok(r.newHtml.includes('style="object-fit:cover"'), "style attr should be present");
+  assert.ok(r.newHtml.includes('src="photo.jpg"'), "existing src must be preserved");
+});
+
+test("buildSave inserts new attr before /> on self-closing void elements", () => {
+  const html = DOC(`<img src="x.png" width="10" height="10" />`);
+  const id = editIdOf(html, "img");
+  const r = buildSave(html, [
+    { editId: id, kind: "attr", attrName: "style", originalContent: "", value: "object-fit:cover" },
+  ]);
+  assert.equal(r.skipped.length, 0);
+  assert.ok(r.newHtml.includes('style="object-fit:cover"'));
+  // The /> must still be present (self-close preserved)
+  assert.ok(r.newHtml.includes("/>"));
+});
+
+test("buildSave replaces an existing attribute when it is already present", () => {
+  const html = DOC(`<img src="x.png" style="display:block">`);
+  const id = editIdOf(html, "img");
+  const r = buildSave(html, [
+    { editId: id, kind: "attr", attrName: "style", originalContent: "", value: "object-fit:cover;display:block" },
+  ]);
+  assert.equal(r.skipped.length, 0);
+  assert.ok(r.newHtml.includes('style="object-fit:cover;display:block"'));
+  assert.ok(!r.newHtml.includes('style="display:block"'), "old style value should be gone");
 });

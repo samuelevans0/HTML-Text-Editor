@@ -63,6 +63,8 @@ iframe.ready { display: block; }
 /* welcome */
 .welcome { position: absolute; inset: 0; display: grid; place-items: center; padding: 2rem; text-align: center; background: var(--bg); }
 .welcome-card { max-width: 36rem; }
+.welcome-actions { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; justify-content: center; margin-top: 1.2rem; }
+.welcome-actions .btn.big { margin-top: 0; }
 .welcome h1 { font-size: 1.7rem; margin: 0 0 .5rem; }
 .welcome p { color: var(--muted); line-height: 1.6; margin: .5rem 0; }
 .welcome ol { text-align: left; color: rgba(231,233,238,.85); line-height: 1.8; margin: 1.3rem auto; max-width: 32rem; }
@@ -78,6 +80,24 @@ iframe.ready { display: block; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.err { background: #3b1d1d; border-color: rgba(248,113,113,.5); }
 .toast code { background: rgba(0,0,0,.3); padding: .1rem .35rem; border-radius: 4px; }
+
+/* home button — only visible when a session is open */
+.home-btn { font-size: .78rem; padding: .38rem .65rem; }
+
+/* pages dropdown */
+.pages-menu { position: relative; }
+.pages-trigger { font-size: .78rem; padding: .38rem .65rem; }
+.pages-list { display: none; position: absolute; top: calc(100% + .35rem); left: 0; min-width: 11rem; background: var(--bar2); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); z-index: 200; padding: .3rem; }
+.pages-menu.open .pages-list { display: flex; flex-direction: column; gap: .15rem; }
+.pages-item { justify-content: flex-start; font-size: .82rem; border-radius: 5px; padding: .4rem .7rem; }
+.pages-item.active { color: var(--accent); }
+
+/* open dropdown (Tauri) */
+.open-menu { position: relative; }
+.open-menu-trigger { }
+.open-menu-list { display: none; position: absolute; top: calc(100% + .35rem); right: 0; min-width: 12rem; background: var(--bar2); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); z-index: 200; padding: .3rem; }
+.open-menu.open .open-menu-list { display: flex; flex-direction: column; gap: .15rem; }
+.open-menu-item { justify-content: flex-start; font-size: .82rem; border-radius: 5px; padding: .4rem .7rem; }
 
 /* server-mode site picker */
 .site-list { display: flex; flex-direction: column; gap: .5rem; margin: 1.3rem auto 0; max-width: 26rem; }

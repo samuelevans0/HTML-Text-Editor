@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -25,3 +25,7 @@ const html = shell
 
 await writeFile(join(root, "editor.html"), html, "utf8");
 console.log("Wrote editor.html (" + html.length + " bytes)");
+
+await mkdir(join(root, "dist"), { recursive: true });
+await writeFile(join(root, "dist", "index.html"), html, "utf8");
+console.log("Wrote dist/index.html (" + html.length + " bytes)");

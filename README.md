@@ -4,18 +4,32 @@ A visual editor for **any static HTML website**. Open your site folder, click to
 swap images, and follow links to edit other pages — then **Save All** writes your changes
 straight back into the real files, with surgically minimal diffs.
 
-It works in **any browser**: directly in Chrome/Edge, or in Firefox/Safari/Brave/Mullvad/etc.
-via a tiny local helper. This replaces the old SportsCenter-specific editor (kept as
-`editor.legacy.html`).
+It runs three ways: as a **standalone Windows desktop app**, directly in **Chrome/Edge**, or in
+**any browser** (Firefox/Safari/Brave/Mullvad/etc.) via a tiny local helper. This replaces the
+old SportsCenter-specific editor (kept as `editor.legacy.html`).
 
-## Two ways to run it
+## Ways to run it
 
-### A. Chrome / Edge — no install
+### Desktop app (Windows) — standalone, no browser, no install
+The simplest option. **`HTML Site Editor.exe`** is a single ~9 MB portable file (it uses the
+WebView2 runtime already built into Windows 10/11 — no bundled browser). Copy it anywhere and
+double-click it; no Node, no helper, no browser tab.
+
+1. Double-click **`HTML Site Editor.exe`**.
+2. Click **Open site folder** (or **drag a folder / `.html` file onto the window**) and pick
+   your site.
+3. Edit, then **Save All** — it writes straight to your real files via native OS file access.
+
+Prebuilt artifacts live in **`app-build/`** (the portable `.exe` plus an NSIS `-setup.exe`
+installer and an `.msi`). It's **unsigned**, so SmartScreen may warn the first time:
+**"More info" → "Run anyway."** To rebuild it yourself, see [Building the desktop app](#building-the-desktop-app).
+
+### Chrome / Edge — no install
 1. Open **`editor.html`** in Chrome or Edge (double-click it).
 2. Click **Open site folder** (or **drag a folder onto the window**) and pick your site.
 3. Edit, then **Save All**.
 
-### B. Any browser — the helper (Firefox, Safari, Brave, Mullvad, …)
+### Any browser — the helper (Firefox, Safari, Brave, Mullvad, …)
 Direct `file://` saving only works in Chromium browsers. For **any** browser, run the helper
 (needs [Node.js](https://nodejs.org) installed):
 
@@ -84,6 +98,46 @@ npm run test:e2e       # headless file:// flow (in-memory fs)
 npm run test:e2e-server # headless server flow over http://localhost
 ```
 
+### Building the desktop app
+
+The desktop app is a thin [Tauri v2](https://tauri.app) shell in `src-tauri/` around the same
+`src/` frontend. The build runs `assemble.mjs` to produce `dist/index.html`, then compiles a
+native Rust host that serves it in a WebView2 window. `src/tauriFs.js` gives the frontend native
+file access (the same interface as `fsAccess.js`), so no browser File System Access API or helper
+server is needed.
+
+One-time prerequisites:
+
+```sh
+winget install Rustlang.Rustup                 # Rust toolchain
+winget install Microsoft.VisualStudio.2022.BuildTools `
+  --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"   # MSVC linker + Windows SDK
+npm install                                    # picks up @tauri-apps/cli
+node build/make-icon.mjs && npm run tauri -- icon src-tauri/icon-source.png   # (re)generate icons
+```
+
+Then:
+
+```sh
+npm run tauri:dev      # dev window with hot frontend rebuild
+npm run tauri:build    # portable .exe + installers
+```
+
+> ⚠️ **Apostrophe-in-path caveat (this repo).** This project lives under `…\Schmamel's Stuff\…`,
+> and the Windows resource compiler (via `tauri-winres`) mis-escapes the apostrophe, failing the
+> build with `RC2135: file not found …icon.ico`. A directory junction/symlink does **not** help
+> (Rust canonicalizes it back to the real apostrophe path). **Build from a real copy on an
+> apostrophe-free path:**
+>
+> ```powershell
+> robocopy "<this folder>" "C:\hse-build" /E /XD "<this folder>\src-tauri\target" "<this folder>\.git"
+> cd C:\hse-build; npm run tauri:build
+> # artifacts: C:\hse-build\src-tauri\target\release\html-site-editor.exe (+ bundle\)
+> ```
+>
+> The prebuilt files in `app-build/` were produced this way. Renaming the folder to remove the
+> apostrophe would also fix it permanently.
+
 ### Layout
 
 | Path | Responsibility |
@@ -94,13 +148,16 @@ npm run test:e2e-server # headless server flow over http://localhost
 | `src/paths.js` | In-folder path resolution. |
 | `src/fsAccess.js` | File System Access directory backend (Chromium `file://`). |
 | `src/serverFs.js` | Local-helper backend (`fetch` to the server) — same interface as `fsAccess`. |
+| `src/tauriFs.js` | Tauri desktop backend (native Rust file commands) — same interface as `fsAccess`. |
 | `src/assets.js` | Faithful preview via blob-URL asset rewriting. |
 | `src/editor.js` | In-iframe editing layer (text/image/link). |
 | `src/pages.js` | Multi-page session + Save All + image rules. |
 | `src/app.js` | Chrome, boot-mode detection, open/load/navigate/save, drag-and-drop. |
 | `server.mjs` | The local helper (Node built-ins only). |
 | `start.cmd` / `start.sh` | Double-click launchers for the helper. |
-| `build/assemble.mjs` | Bundles everything into `editor.html`. |
+| `build/assemble.mjs` | Bundles everything into `editor.html` (and `dist/index.html` for Tauri). |
+| `build/make-icon.mjs` | Generates the square app-icon source PNG (pure Node, no deps). |
+| `src-tauri/` | Tauri v2 desktop shell: Rust file commands (`src/lib.rs`), window config, capabilities. |
 | `tests/` | Unit tests, headless integration tests, and a demo fixture site. |
 
 See `docs/specs/` and `docs/plans/` for the design and implementation plans.

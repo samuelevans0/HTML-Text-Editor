@@ -8,9 +8,13 @@
     "build:exe": "node build/build-exe.mjs",
     "test": "node --test",
     "test:e2e": "node tests/e2e/run.mjs",
-    "test:e2e-server": "node tests/e2e/server.mjs"
+    "test:e2e-server": "node tests/e2e/server.mjs",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
     "esbuild": "^0.24.0",
     "jsdom": "^25.0.1",
     "parse5": "^7.2.1",
