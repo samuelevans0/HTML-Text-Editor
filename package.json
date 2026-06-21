@@ -6,8 +6,6 @@
   "scripts": {
     "build": "node build/assemble.mjs",
     "test": "node --test",
-    "test:e2e": "node tests/e2e/run.mjs",
-    "test:e2e-server": "node tests/e2e/server.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"

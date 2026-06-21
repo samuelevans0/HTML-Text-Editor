@@ -1,39 +1,19 @@
 // App shell: chrome, folder open, page load/navigate, and Save All orchestration.
-import { supported, pickRoot, createFs } from "./fsAccess.js";
 import { createSession } from "./pages.js";
 import { buildPreview } from "./assets.js";
 import { wireEditor } from "./editor.js";
 import { resolvePath, isHtml } from "./paths.js";
-import { inServerMode, siteFromQuery, fetchSites, createServerFs } from "./serverFs.js";
 import { createTauriFs, pickTauriFolder, pickTauriFile } from "./tauriFs.js";
-
-const isTauri = typeof window !== "undefined" && typeof window.__TAURI__ !== "undefined";
 
 const IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|svg|avif|bmp|ico)$/i;
 const IMAGE_MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", avif: "image/avif", bmp: "image/bmp", ico: "image/x-icon" };
 
 let fs = null;
 let session = null;
-let rootHandle = null;
 let currentPath = null;
 let currentRevoke = null;
 let currentEditor = null; // result of wireEditor() — exposes applyImageAt()
 const navStack = [];
-
-// Pure: pick the helper site whose path contains a segment matching the dropped folder name.
-export function matchSite(name, sites) {
-  const segs = (s) => s.split("/");
-  const last = (s) => segs(s).pop();
-  let m = sites.find((s) => last(s) === name);
-  if (m) return m;
-  m = sites.find((s) => last(s).toLowerCase() === String(name).toLowerCase());
-  if (m) return m;
-  m = sites.find((s) => segs(s).includes(name));
-  if (m) return m;
-  const nl = String(name).toLowerCase();
-  m = sites.find((s) => segs(s).some((p) => p.toLowerCase() === nl));
-  return m || null;
-}
 
 // ---- tiny DOM helper ----
 function h(tag, attrs = {}, ...kids) {
@@ -60,7 +40,7 @@ export function bootApp() {
   els.crumb = h("span", { class: "crumb", id: "crumb" }, "");
   els.hint = h("span", { class: "hint" }, "Click a link to open & edit it · Alt-click a link to change its address");
   els.pages = h("div", { class: "pages-menu", id: "pagesMenu", hidden: "" });
-  els.open = isTauri ? buildOpenMenu() : h("button", { class: "btn go", onclick: openFolder }, "Open site folder");
+  els.open = buildOpenMenu();
   els.discard = h("button", { class: "btn ghost", disabled: "", onclick: discardCurrent }, "Discard page");
   els.save = h("button", { class: "btn primary", id: "save", disabled: "", onclick: saveAll },
     "Save All ", h("span", { class: "dot", id: "dot", hidden: "" }, "●"));
@@ -83,16 +63,6 @@ export function bootApp() {
     if (els.pages && !els.pages.contains(e.target)) els.pages.classList.remove("open");
   });
 
-  if (isTauri) {
-    // Native file access via Tauri — no server or browser API needed.
-  } else if (inServerMode()) {
-    bootServerMode();
-  } else if (!supported()) {
-    els.pill.textContent = "Needs the launcher";
-    els.pill.className = "pill warn";
-    showToast("To edit in <b>this</b> browser, start the helper: double-click <code>start.cmd</code>. (Chrome/Edge can also open <code>editor.html</code> directly.)", true);
-  }
-
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
       e.preventDefault();
@@ -107,7 +77,7 @@ export function bootApp() {
   if (/[?&]test=1/.test(location.search)) installTestApi();
 }
 
-// ---- Tauri: single "Open" button with folder / file sub-menu ----
+// ---- "Open ▾" button with folder / file sub-menu ----
 function buildOpenMenu() {
   const menu = h("div", { class: "open-menu" });
   const btn = h("button", { class: "btn go open-menu-trigger", onclick: (e) => { e.stopPropagation(); menu.classList.toggle("open"); } }, "Open ▾");
@@ -120,104 +90,27 @@ function buildOpenMenu() {
 }
 
 function buildWelcome() {
-  const openActions = isTauri
-    ? h("div", { class: "welcome-actions" },
-        h("button", { class: "btn primary big", onclick: openFolder }, "📁 Open site folder"),
-        h("button", { class: "btn ghost big", onclick: openFile }, "📄 Open HTML file"))
-    : h("button", { class: "btn primary big", onclick: openFolder }, "Open site folder");
-
   return h("div", { class: "welcome", id: "welcome" },
     h("div", { class: "welcome-card" },
       h("h1", {}, "Edit your website"),
       h("p", {}, "Open your site folder or a single HTML file, click any text to edit it, swap images, and follow links to edit other pages — then Save All writes everything back."),
       h("ol", {},
-        h("li", { html: isTauri ? "Click <b>Open site folder</b> (or drag a folder / .html file onto the window)." : "Click <b>Open site folder</b> and choose the folder that holds your pages (e.g. <code>index.html</code>). Click <b>Allow</b>." }),
+        h("li", { html: "Click <b>Open site folder</b> (or drag a folder / .html file onto the window)." }),
         h("li", { html: "Click text to edit · <b>Ctrl/Cmd+B/I</b> for bold/italic · click an image to replace it · drag an image file onto an image slot." }),
         h("li", { html: "Click a link to open and edit that page · use the <b>Pages</b> menu to jump to any page · <b>Alt-click</b> a link to change where it points." }),
         h("li", { html: "Click <b>Save All</b> (or <b>Ctrl/Cmd+S</b>). Only the bits you changed are written." })),
-      isTauri ? null : h("p", { class: "hint", html: "In <b>Chrome/Edge</b> open this file directly. In <b>any</b> browser (Firefox, Safari, Brave…), start the helper with <code>start.cmd</code>." }),
-      openActions));
-}
-
-// ---- server mode ----
-async function bootServerMode() {
-  els.pill.textContent = "Helper connected";
-  els.pill.className = "pill ok";
-  if (!isTauri) els.open.textContent = "Choose a site";
-  const site = siteFromQuery();
-  if (site) { await startSession(createServerFs(site), site); return; }
-  await showSitePicker();
-}
-
-async function showSitePicker() {
-  let data;
-  try { data = await fetchSites(); }
-  catch { showToast("Can't reach the local helper — is <code>start.cmd</code> running?", true); return; }
-  if (currentRevoke) { currentRevoke(); currentRevoke = null; }
-  els.frame.classList.remove("ready");
-  els.welcome.style.display = "grid";
-  const card = els.welcome.querySelector(".welcome-card");
-  card.innerHTML = "";
-  card.append(h("h1", {}, "Pick a site to edit"));
-  if (!data.sites.length) {
-    card.append(h("p", { html: `No site folders found under <code>${escapeHtml(data.base)}</code>.` }));
-    return;
-  }
-  card.append(h("p", { class: "hint", html: `Folders under <b>${escapeHtml(data.base)}</b> — or drag one onto this window.` }));
-  const list = h("div", { class: "site-list" });
-  for (const s of data.sites) {
-    list.append(h("button", { class: "btn go site-btn", onclick: () => startSession(createServerFs(s), s) }, s));
-  }
-  card.append(list);
-}
-
-// Wrap a single FileSystemFileHandle as a minimal fs (Chromium drag of a .html file).
-function createSingleFileFs(fileHandle) {
-  const name = fileHandle.name;
-  return {
-    rootHandle: {
-      name,
-      async *values() { yield { kind: "file", name }; },
-    },
-    async readText() { return (await fileHandle.getFile()).text(); },
-    async readBytes() { return fileHandle.getFile(); },
-    async writeText(p, t) {
-      const w = await fileHandle.createWritable();
-      await w.write(t); await w.close();
-    },
-    async writeBytes(p, b) {
-      const w = await fileHandle.createWritable();
-      await w.write(b instanceof Blob ? b : new Blob([b])); await w.close();
-    },
-    async exists(p) { return p === name; },
-    async uniqueName(dir, base) { return base; },
-  };
+      h("div", { class: "welcome-actions" },
+        h("button", { class: "btn primary big", onclick: openFolder }, "📁 Open site folder"),
+        h("button", { class: "btn ghost big", onclick: openFile }, "📄 Open HTML file"))));
 }
 
 // ---- open ----
 async function openFolder() {
-  if (isTauri) {
-    const tFs = await pickTauriFolder();
-    if (!tFs) return;
-    await startSession(tFs, tFs.rootHandle.name);
-    return;
-  }
-  if (inServerMode()) return showSitePicker();
-  if (!supported()) {
-    showToast("This browser can't save files directly. Start the helper — double-click <code>start.cmd</code> — and use the link it opens.", true);
-    return;
-  }
-  try {
-    rootHandle = await pickRoot();
-  } catch (err) {
-    if (err && err.name === "AbortError") return;
-    showToast("Couldn't open the folder: " + (err && err.message), true);
-    return;
-  }
-  await startSession(createFs(rootHandle), rootHandle.name);
+  const tFs = await pickTauriFolder();
+  if (!tFs) return;
+  await startSession(tFs, tFs.rootHandle.name);
 }
 
-// Open a single .html file (Tauri only): root the fs at the file's folder so CSS/images resolve.
 async function openFile() {
   const filePath = await pickTauriFile();
   if (!filePath) return;
@@ -292,7 +185,6 @@ async function refreshPagesMenu() {
   els.pages.hidden = false;
 }
 
-// Update the active page highlight in the Pages dropdown.
 function updatePagesActive() {
   for (const item of els.pages.querySelectorAll(".pages-item")) {
     item.classList.toggle("active", item.textContent === currentPath);
@@ -420,7 +312,7 @@ async function saveAll() {
   try {
     result = await session.saveAll();
   } catch (err) {
-    showToast("Save failed: " + (err && err.message) + ". Try Open again, or check the helper is running.", true);
+    showToast("Save failed: " + (err && err.message), true);
     updateChrome();
     return null;
   }
@@ -449,81 +341,26 @@ function installDragAndDrop() {
   const overlay = h("div", { class: "drop-overlay", id: "dropOverlay" }, "Drop a site folder, .html file, or image onto an image slot");
   document.body.append(overlay);
 
-  if (isTauri) {
-    window.__TAURI__.webview.getCurrentWebview().onDragDropEvent(async (event) => {
-      const type = event.payload.type;
-      if (type === "hover") { overlay.classList.add("show"); return; }
-      if (type === "leave" || type === "cancelled") { overlay.classList.remove("show"); return; }
-      if (type !== "drop") return;
-      overlay.classList.remove("show");
-      const paths = event.payload.paths;
-      if (!paths || !paths.length) return;
-      const p = paths[0];
-      const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  window.__TAURI__.webview.getCurrentWebview().onDragDropEvent(async (event) => {
+    const type = event.payload.type;
+    if (type === "hover") { overlay.classList.add("show"); return; }
+    if (type === "leave" || type === "cancelled") { overlay.classList.remove("show"); return; }
+    if (type !== "drop") return;
+    overlay.classList.remove("show");
+    const paths = event.payload.paths;
+    if (!paths || !paths.length) return;
+    const p = paths[0];
+    const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
 
-      if (IMAGE_EXTS.test(name)) {
-        await handleTauriImageDrop(p, name, event.payload.position);
-        return;
-      }
-      if (/\.html?$/i.test(name)) {
-        await openTauriHtmlFile(p);
-      } else {
-        await startSession(createTauriFs(p), name);
-      }
-    });
-    return;
-  }
-
-  // Browser (non-Tauri) drag-and-drop handlers below.
-  let sitesCache = null;
-  let depth = 0;
-  window.addEventListener("dragenter", (e) => { e.preventDefault(); depth++; overlay.classList.add("show"); });
-  window.addEventListener("dragover", (e) => e.preventDefault());
-  window.addEventListener("dragleave", (e) => { e.preventDefault(); if (--depth <= 0) overlay.classList.remove("show"); });
-  window.addEventListener("drop", async (e) => {
-    e.preventDefault(); depth = 0; overlay.classList.remove("show");
-    const item = e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items[0];
-    if (!item) return;
-
-    if (typeof item.getAsFileSystemHandle === "function") {
-      let handle = null;
-      try { handle = await item.getAsFileSystemHandle(); } catch {}
-      if (handle && handle.kind === "directory") {
-        if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
-        await startSession(createFs(handle), handle.name);
-        return;
-      }
-      if (handle && handle.kind === "file") {
-        if (!/\.html?$/i.test(handle.name)) {
-          showToast("Drop an <b>.html</b> file or a site folder.", true); return;
-        }
-        if (handle.requestPermission) { try { await handle.requestPermission({ mode: "readwrite" }); } catch {} }
-        await startSession(createSingleFileFs(handle), handle.name);
-        return;
-      }
-    }
-
-    const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
-    if (entry && entry.isDirectory) {
-      if (!inServerMode()) {
-        showToast("Folder drag works in <b>Chrome/Edge</b>. In other browsers, start the helper (<code>start.cmd</code>) and pick a site from the list.", true);
-        return;
-      }
-      try {
-        if (!sitesCache) sitesCache = (await fetchSites()).sites;
-        const match = matchSite(entry.name, sitesCache);
-        if (match) { await startSession(createServerFs(match), match); return; }
-      } catch {}
-      showToast("Couldn't find <b>" + escapeHtml(entry.name) + "</b> under the helper's folder. Move it there, or pick it from the list.", true);
+    if (IMAGE_EXTS.test(name)) {
+      await handleTauriImageDrop(p, name, event.payload.position);
       return;
     }
-    if (entry && entry.isFile) {
-      showToast(inServerMode()
-        ? "Single-file drag needs <b>Chrome/Edge</b>. In Firefox, pick a site from the list instead."
-        : "File drag works in <b>Chrome/Edge</b>. Open <code>editor.html</code> in Chrome/Edge to drag files.", true);
-      return;
+    if (/\.html?$/i.test(name)) {
+      await openTauriHtmlFile(p);
+    } else {
+      await startSession(createTauriFs(p), name);
     }
-    showToast("Drop a site folder or <code>.html</code> file. (Chrome/Edge: any folder; Firefox/Brave: use the helper and pick from the list.)", true);
   });
 }
 
