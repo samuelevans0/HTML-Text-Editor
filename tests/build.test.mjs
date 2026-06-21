@@ -7,9 +7,9 @@ import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("build produces a self-contained editor.html", async () => {
+test("build produces a self-contained dist/index.html", async () => {
   execFileSync("node", [join(root, "build/assemble.mjs")], { stdio: "inherit" });
-  const html = await readFile(join(root, "editor.html"), "utf8");
+  const html = await readFile(join(root, "dist", "index.html"), "utf8");
   assert.match(html, /Open site folder/); // bundled app script is inlined
   assert.match(html, /<!DOCTYPE html>/);
   assert.ok(!/\{\{SCRIPT\}\}|\{\{STYLE\}\}/.test(html), "no unreplaced slots");

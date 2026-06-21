@@ -10,6 +10,7 @@ build/sea-config.json
 
 # Tauri build output
 dist/
+editor.html
 src-tauri/target/
 src-tauri/gen/
 src-tauri/icon-source.png
