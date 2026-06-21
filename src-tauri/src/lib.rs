@@ -57,9 +57,29 @@ fn list_dir(path: String) -> Result<Vec<DirEntryInfo>, String> {
     Ok(entries)
 }
 
+#[cfg(windows)]
+fn show_fatal_error(title: &str, message: &str) {
+    use std::ffi::OsStr;
+    use std::iter::once;
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(hwnd: isize, lptext: *const u16, lpcaption: *const u16, utype: u32) -> i32;
+    }
+    let wide = |s: &str| -> Vec<u16> { OsStr::new(s).encode_wide().chain(once(0)).collect() };
+    let t = wide(title);
+    let m = wide(message);
+    unsafe { MessageBoxW(0, m.as_ptr(), t.as_ptr(), 0x10); } // MB_OK | MB_ICONERROR
+}
+
+#[cfg(not(windows))]
+fn show_fatal_error(_title: &str, message: &str) {
+    eprintln!("{}", message);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             read_text,
@@ -69,6 +89,26 @@ pub fn run() {
             path_exists,
             list_dir,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    if let Err(e) = result {
+        let detail = e.to_string();
+        if detail.to_lowercase().contains("webview") {
+            show_fatal_error(
+                "HTML Site Editor \u{2014} Missing Component",
+                "HTML Site Editor requires the Microsoft WebView2 Runtime, which was not found on this computer.\
+\n\nTo fix this:\
+\n 1. Go to: https://developer.microsoft.com/microsoft-edge/webview2/\
+\n 2. Download and run the \"Evergreen Standalone Installer\"\
+\n 3. Re-launch HTML Site Editor\
+\n\nNote: WebView2 is pre-installed on Windows 11 and most up-to-date Windows 10 systems.",
+            );
+        } else {
+            show_fatal_error(
+                "HTML Site Editor \u{2014} Startup Error",
+                &format!("HTML Site Editor failed to start.\n\n{detail}"),
+            );
+        }
+        std::process::exit(1);
+    }
 }
