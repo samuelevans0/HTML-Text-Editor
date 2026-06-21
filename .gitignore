@@ -19,3 +19,11 @@ app-build/
 .impeccable/
 docs/plans/
 docs/specs/
+
+# Code-signing keys (never commit these)
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
