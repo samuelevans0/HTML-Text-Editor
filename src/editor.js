@@ -95,10 +95,28 @@ export function wireEditor(doc, cb) {
     }
   });
 
+  // Re-capture the identity snapshot from the live DOM. Call after a successful
+  // save so the just-saved content becomes the new baseline. Without this, the
+  // snapshot keeps the pre-edit text and re-editing the same element in one
+  // session fails the identity check with a false "content drift".
+  function resyncIdentity() {
+    origText.clear();
+    for (const el of collectEditables(doc)) {
+      if (!el.hasAttribute("data-edit-id")) continue;
+      origText.set(Number(el.getAttribute("data-edit-id")), el.textContent);
+    }
+    for (const a of doc.querySelectorAll("a[data-edit-id]")) {
+      const editId = Number(a.getAttribute("data-edit-id"));
+      if (!origText.has(editId)) origText.set(editId, a.textContent);
+    }
+  }
+
   return {
     revoke() { style.remove(); },
     // Apply an image file to a specific img element (used by Tauri drag-drop handler).
     applyImageAt(img, file) { applyImage(img, file, cb); },
+    // Re-baseline the identity snapshot after a save (see resyncIdentity above).
+    resyncIdentity,
   };
 }
 

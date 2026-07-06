@@ -231,3 +231,40 @@ test("buildSave replaces an existing attribute when it is already present", () =
   assert.ok(r.newHtml.includes('style="object-fit:cover;display:block"'));
   assert.ok(!r.newHtml.includes('style="display:block"'), "old style value should be gone");
 });
+
+// ---------- save -> re-edit identity baseline ----------
+// After a save, the saved file is the new baseline. A second edit of the same
+// element must carry the post-save text as originalContent, or it falsely drifts.
+// This guards the editor's resyncIdentity() behaviour at the buildSave contract level.
+
+test("re-editing a saved element drifts if originalContent is the stale pre-save text", () => {
+  const html = DOC(`<h1>Old Title</h1>`);
+  const id = editIdOf(html, "h1");
+  const first = buildSave(html, [
+    { editId: id, kind: "text", originalContent: "Old Title", replacement: "Saved Title" },
+  ]);
+  assert.equal(first.newHtml, DOC(`<h1>Saved Title</h1>`));
+
+  // Simulate the bug: snapshot never refreshed, so originalContent is still the original.
+  const second = buildSave(first.newHtml, [
+    { editId: id, kind: "text", originalContent: "Old Title", replacement: "Newer Title" },
+  ]);
+  assert.equal(second.newHtml, first.newHtml, "stale baseline => nothing applied");
+  assert.equal(second.skipped[0].reason, "content drift (identity check failed)");
+});
+
+test("re-editing a saved element applies when originalContent is re-baselined to the saved text", () => {
+  const html = DOC(`<h1>Old Title</h1>`);
+  const id = editIdOf(html, "h1");
+  const first = buildSave(html, [
+    { editId: id, kind: "text", originalContent: "Old Title", replacement: "Saved Title" },
+  ]);
+
+  // resyncIdentity() makes "Saved Title" the new baseline for the next edit.
+  const second = buildSave(first.newHtml, [
+    { editId: id, kind: "text", originalContent: "Saved Title", replacement: "Newer Title" },
+  ]);
+  assert.equal(second.newHtml, DOC(`<h1>Newer Title</h1>`));
+  assert.equal(second.skipped.length, 0);
+  assert.deepEqual(second.applied, [id]);
+});

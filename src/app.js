@@ -51,7 +51,12 @@ export function bootApp() {
     h("span", { class: "spacer" }), els.hint,
     els.open, els.discard, els.save);
 
-  els.frame = h("iframe", { id: "frame", title: "Page preview" });
+  // sandbox WITHOUT allow-scripts: the preview renders HTML/CSS/images and the
+  // host (same-origin, not sandboxed) still reaches in via contentDocument to wire
+  // editing — but scripts inside a previewed/edited file cannot execute, so they
+  // cannot reach the Tauri IPC (window.top.__TAURI__) to read/write arbitrary
+  // files. allow-same-origin is required for the host to access the iframe DOM.
+  els.frame = h("iframe", { id: "frame", title: "Page preview", sandbox: "allow-same-origin" });
   els.welcome = buildWelcome();
   els.stage = h("div", { class: "stage" }, els.frame, els.welcome);
   els.toast = h("div", { class: "toast", id: "toast" });
@@ -316,6 +321,9 @@ async function saveAll() {
     updateChrome();
     return null;
   }
+  // The saved file is now the new baseline; re-snapshot identity so the user can
+  // keep editing the same elements without tripping a false "content drift".
+  if (currentEditor && currentEditor.resyncIdentity) currentEditor.resyncIdentity();
   const parts = [];
   if (result.savedPages.length) parts.push(result.savedPages.length + " page" + (result.savedPages.length > 1 ? "s" : ""));
   if (result.savedImages.length) parts.push(result.savedImages.length + " image" + (result.savedImages.length > 1 ? "s" : ""));
@@ -324,6 +332,15 @@ async function saveAll() {
   if (result.skipped.length) {
     const lines = result.skipped.map((s) => "• " + escapeHtml(s.path || "") + " (#" + s.editId + "): " + escapeHtml(s.reason)).join("<br>");
     showToast("Some edits were skipped to protect your files:<br>" + lines, true);
+  }
+  if (result.conflicts && result.conflicts.length) {
+    const lines = result.conflicts.map((c) => "• " + escapeHtml(c.path || "")).join("<br>");
+    showToast(
+      "These files changed on disk outside the editor, so they were NOT saved " +
+      "(your in-editor edits are kept):<br>" + lines +
+      "<br>Reload the page to get the latest version, or copy your changes out first.",
+      true,
+    );
   }
   updateChrome();
   return result;

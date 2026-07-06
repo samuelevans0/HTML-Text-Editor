@@ -57,9 +57,21 @@ export function createSession(fs) {
   }
 
   async function saveAll() {
-    const result = { savedPages: [], savedImages: [], skipped: [] };
+    const result = { savedPages: [], savedImages: [], skipped: [], conflicts: [] };
     for (const page of pages.values()) {
       if (!page.dirty) continue;
+
+      // Guard against clobbering changes made to the file outside the editor.
+      // We patch against our in-memory baseline (page.originalText); if the file
+      // on disk no longer matches it, someone/something edited it since we loaded.
+      // Saving would overwrite those changes, so skip this page and report it.
+      let onDisk = null;
+      try { onDisk = await fs.readText(page.path); } catch { onDisk = null; }
+      if (onDisk !== null && onDisk !== page.originalText) {
+        result.conflicts.push({ path: page.path });
+        continue;
+      }
+
       const edits = [...page.edits.values()];
 
       // Resolve image replacements into file writes (+ src attr edits if a new file).
